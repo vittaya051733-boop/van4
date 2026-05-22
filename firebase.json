@@ -1,0 +1,11 @@
+{
+  "hosting": {
+    "target": "van4",
+    "public": "build/web",
+    "ignore": [
+      "firebase.json",
+      "**/.*",
+      "**/node_modules/**"
+    ]
+  }
+}

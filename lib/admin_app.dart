@@ -1,0 +1,338 @@
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/material.dart';
+
+import 'admin_repository.dart';
+import 'admin_screens.dart';
+
+class VanMarketAdminApp extends StatelessWidget {
+  const VanMarketAdminApp({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      debugShowCheckedModeBanner: false,
+      title: 'ADMIN',
+      theme: ThemeData(
+        colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFFE65100)),
+        scaffoldBackgroundColor: const Color(0xFFFFF8F1),
+      ),
+      home: const AdminAuthGate(),
+    );
+  }
+}
+
+class AdminAuthGate extends StatelessWidget {
+  const AdminAuthGate({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<User?>(
+      stream: FirebaseAuth.instance.authStateChanges(),
+      builder: (context, authSnapshot) {
+        if (authSnapshot.connectionState == ConnectionState.waiting) {
+          return const _AdminLoadingScreen(label: 'กำลังตรวจสอบการเข้าสู่ระบบ');
+        }
+
+        final user = authSnapshot.data;
+        if (user == null) {
+          return const AdminLoginScreen();
+        }
+
+        return FutureBuilder<bool>(
+          future: AdminRepository.isAdmin(user.uid),
+          builder: (context, adminSnapshot) {
+            if (adminSnapshot.connectionState == ConnectionState.waiting) {
+              return const _AdminLoadingScreen(
+                label: 'กำลังตรวจสอบสิทธิ์แอดมิน',
+              );
+            }
+
+            if (adminSnapshot.data == true) {
+              return AdminHomeScreen(user: user);
+            }
+
+            return _AdminAccessDeniedScreen(user: user);
+          },
+        );
+      },
+    );
+  }
+}
+
+class AdminLoginScreen extends StatefulWidget {
+  const AdminLoginScreen({super.key});
+
+  @override
+  State<AdminLoginScreen> createState() => _AdminLoginScreenState();
+}
+
+class _AdminLoginScreenState extends State<AdminLoginScreen> {
+  final _formKey = GlobalKey<FormState>();
+  final _emailController = TextEditingController();
+  final _passwordController = TextEditingController();
+  bool _isSubmitting = false;
+  String? _errorText;
+
+  @override
+  void dispose() {
+    _emailController.dispose();
+    _passwordController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _signIn() async {
+    if (!_formKey.currentState!.validate()) {
+      return;
+    }
+
+    setState(() {
+      _isSubmitting = true;
+      _errorText = null;
+    });
+
+    try {
+      await FirebaseAuth.instance.signInWithEmailAndPassword(
+        email: _emailController.text.trim(),
+        password: _passwordController.text,
+      );
+    } on FirebaseAuthException catch (error) {
+      setState(() {
+        _errorText = switch (error.code) {
+          'invalid-credential' => 'อีเมลหรือรหัสผ่านไม่ถูกต้อง',
+          'invalid-email' => 'รูปแบบอีเมลไม่ถูกต้อง',
+          'user-disabled' => 'บัญชีนี้ถูกระงับการใช้งาน',
+          _ => error.message ?? 'เข้าสู่ระบบไม่สำเร็จ',
+        };
+      });
+    } catch (_) {
+      setState(() {
+        _errorText = 'ไม่สามารถเข้าสู่ระบบได้ในขณะนี้';
+      });
+    } finally {
+      if (mounted) {
+        setState(() => _isSubmitting = false);
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final logoSize = (MediaQuery.sizeOf(context).shortestSide * 0.74)
+        .clamp(120.0, 360.0)
+        .toDouble();
+
+    return Scaffold(
+      body: Center(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(24),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 480),
+            child: Card(
+              elevation: 8,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(28),
+              ),
+              child: Padding(
+                padding: const EdgeInsets.all(24),
+                child: Form(
+                  key: _formKey,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: <Widget>[
+                      Center(
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(
+                            logoSize * 20 / 120,
+                          ),
+                          child: Image.asset(
+                            'assets/file_00000000be5472069245fc3bdb122dbb.png',
+                            width: logoSize,
+                            height: logoSize,
+                            fit: BoxFit.cover,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 20),
+                      Text(
+                        'เข้าสู่ระบบแอดมิน',
+                        style: Theme.of(context).textTheme.headlineSmall
+                            ?.copyWith(
+                              fontWeight: FontWeight.w800,
+                              color: const Color(0xFF9A3412),
+                            ),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        'ใช้บัญชี Firebase ที่มีสิทธิ์ admin ใน collection users',
+                        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                          color: const Color(0xFF6B7280),
+                        ),
+                      ),
+                      const SizedBox(height: 20),
+                      TextFormField(
+                        controller: _emailController,
+                        keyboardType: TextInputType.emailAddress,
+                        decoration: const InputDecoration(
+                          labelText: 'อีเมลแอดมิน',
+                          border: OutlineInputBorder(),
+                        ),
+                        validator: (value) {
+                          final text = value?.trim() ?? '';
+                          if (text.isEmpty) {
+                            return 'กรุณากรอกอีเมล';
+                          }
+                          if (!text.contains('@')) {
+                            return 'อีเมลไม่ถูกต้อง';
+                          }
+                          return null;
+                        },
+                      ),
+                      const SizedBox(height: 14),
+                      TextFormField(
+                        controller: _passwordController,
+                        obscureText: true,
+                        decoration: const InputDecoration(
+                          labelText: 'รหัสผ่าน',
+                          border: OutlineInputBorder(),
+                        ),
+                        validator: (value) {
+                          if ((value ?? '').isEmpty) {
+                            return 'กรุณากรอกรหัสผ่าน';
+                          }
+                          return null;
+                        },
+                        onFieldSubmitted: (_) =>
+                            _isSubmitting ? null : _signIn(),
+                      ),
+                      if (_errorText != null) ...<Widget>[
+                        const SizedBox(height: 12),
+                        Text(
+                          _errorText!,
+                          style: const TextStyle(color: Colors.redAccent),
+                        ),
+                      ],
+                      const SizedBox(height: 20),
+                      SizedBox(
+                        width: double.infinity,
+                        child: FilledButton(
+                          onPressed: _isSubmitting ? null : _signIn,
+                          style: FilledButton.styleFrom(
+                            backgroundColor: const Color(0xFFE65100),
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(vertical: 16),
+                          ),
+                          child: _isSubmitting
+                              ? const SizedBox(
+                                  width: 20,
+                                  height: 20,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    color: Colors.white,
+                                  ),
+                                )
+                              : const Text('เข้าสู่ระบบ'),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _AdminLoadingScreen extends StatelessWidget {
+  const _AdminLoadingScreen({required this.label});
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    final logoSize = (MediaQuery.sizeOf(context).shortestSide * 0.74)
+        .clamp(120.0, 360.0)
+        .toDouble();
+
+    return Scaffold(
+      body: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: <Widget>[
+            ClipRRect(
+              borderRadius: BorderRadius.circular(logoSize * 20 / 120),
+              child: Image.asset(
+                'assets/file_00000000be5472069245fc3bdb122dbb.png',
+                width: logoSize,
+                height: logoSize,
+                fit: BoxFit.cover,
+              ),
+            ),
+            const SizedBox(height: 20),
+            const CircularProgressIndicator(),
+            const SizedBox(height: 14),
+            Text(label),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _AdminAccessDeniedScreen extends StatelessWidget {
+  const _AdminAccessDeniedScreen({required this.user});
+
+  final User user;
+
+  Future<void> _signOut() async {
+    await FirebaseAuth.instance.signOut();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 460),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: <Widget>[
+                const Icon(
+                  Icons.admin_panel_settings_outlined,
+                  size: 72,
+                  color: Color(0xFFE65100),
+                ),
+                const SizedBox(height: 16),
+                Text(
+                  'บัญชีนี้ยังไม่มีสิทธิ์แอดมิน',
+                  style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                    fontWeight: FontWeight.w800,
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  user.email ?? user.uid,
+                  textAlign: TextAlign.center,
+                  style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                    color: const Color(0xFF6B7280),
+                  ),
+                ),
+                const SizedBox(height: 20),
+                OutlinedButton(
+                  onPressed: _signOut,
+                  child: const Text('ออกจากระบบ'),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
