@@ -164,7 +164,7 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
                       ),
                       const SizedBox(height: 8),
                       Text(
-                        'ใช้บัญชี Firebase ที่มีสิทธิ์ admin ใน collection users',
+                        'ใช้บัญชี Firebase ที่มีอีเมลอยู่ใน collection แอดมิน',
                         style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                           color: const Color(0xFF6B7280),
                         ),
@@ -309,7 +309,7 @@ class _AdminAccessDeniedScreen extends StatelessWidget {
                 ),
                 const SizedBox(height: 16),
                 Text(
-                  'บัญชีนี้ยังไม่มีสิทธิ์แอดมิน',
+                  'อีเมลนี้ยังไม่อยู่ใน collection แอดมิน',
                   style: Theme.of(context).textTheme.headlineSmall?.copyWith(
                     fontWeight: FontWeight.w800,
                   ),

@@ -17,20 +17,27 @@ class AdminRepository {
     'other_registrations',
   ];
 
+  static const String adminCollection = 'แอดมิน';
+
   static String? get _adminUid => FirebaseAuth.instance.currentUser?.uid;
 
   static Future<bool> isAdmin(String uid) async {
-    final doc = await _firestore.collection('users').doc(uid).get();
+    final email = FirebaseAuth.instance.currentUser?.email?.trim().toLowerCase();
+    if (email == null || email.isEmpty) {
+      return false;
+    }
+
+    final doc = await _firestore.collection(adminCollection).doc(email).get();
+    if (!doc.exists) {
+      return false;
+    }
+
     final data = doc.data();
     if (data == null) {
       return false;
     }
 
-    final role = (data['role'] as String?)?.trim().toLowerCase();
-    return role == 'admin' ||
-        role == 'superadmin' ||
-        (data['isAdmin'] as bool?) == true ||
-        (data['admin'] as bool?) == true;
+    return data['active'] != false;
   }
 
   static Stream<List<AdminShopRecord>> streamShops() {
