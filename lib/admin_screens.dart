@@ -1,7 +1,10 @@
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
+import 'admin_image_widgets.dart';
+import 'admin_order_support.dart';
 import 'admin_repository.dart';
+import 'admin_shop_screens.dart';
 
 class AdminHomeScreen extends StatelessWidget {
   const AdminHomeScreen({super.key, required this.user});
@@ -76,7 +79,7 @@ class AdminHomeScreen extends StatelessWidget {
           _AdminPrimaryButton(
             icon: Icons.receipt_long_outlined,
             title: 'จัดการออเดอร์',
-            subtitle: 'ดูออเดอร์ข้ามแอป ยกเลิก และติดตาม van1/van2/van3',
+            subtitle: 'แยกสำเร็จ/ไม่สำเร็จ/ยกเลิก/ขอคืนเงิน + CSV 4 ฝ่าย 18:00',
             onTap: () => Navigator.of(context).push(
               MaterialPageRoute<void>(builder: (_) => const OrderManagementScreen()),
             ),
@@ -85,7 +88,7 @@ class AdminHomeScreen extends StatelessWidget {
           _AdminPrimaryButton(
             icon: Icons.storefront_outlined,
             title: 'จัดการร้านค้า',
-            subtitle: 'อนุมัติ/ปฏิเสธร้าน และซิงก์ public_shops ให้ van2',
+            subtitle: 'อนุมัติร้าน • สินค้ารอตรวจ (AI) • ช่วยอัปโหลด • ตั้งค่ารูป/วิดีโอ',
             onTap: () => Navigator.of(context).push(
               MaterialPageRoute<void>(builder: (_) => const ShopManagementScreen()),
             ),
@@ -123,8 +126,96 @@ class AdminHomeScreen extends StatelessWidget {
   }
 }
 
-class OrderManagementScreen extends StatelessWidget {
+class OrderManagementScreen extends StatefulWidget {
   const OrderManagementScreen({super.key});
+
+  @override
+  State<OrderManagementScreen> createState() => _OrderManagementScreenState();
+}
+
+class _OrderManagementScreenState extends State<OrderManagementScreen>
+    with SingleTickerProviderStateMixin {
+  late final TabController _tabController;
+  AdminDailyCsvScheduler? _csvScheduler;
+  bool _exportingCsv = false;
+
+  static const List<AdminOrderCategory> _categories = <AdminOrderCategory>[
+    AdminOrderCategory.success,
+    AdminOrderCategory.unsuccessful,
+    AdminOrderCategory.cancelled,
+    AdminOrderCategory.refund,
+  ];
+
+  @override
+  void initState() {
+    super.initState();
+    _tabController = TabController(length: _categories.length, vsync: this);
+    _csvScheduler = AdminDailyCsvScheduler(
+      onExport: (reportDate) => _runDailyCsvExport(reportDate, showFeedback: true),
+    )..start();
+  }
+
+  @override
+  void dispose() {
+    _csvScheduler?.dispose();
+    _tabController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _runDailyCsvExport(
+    DateTime reportDate, {
+    bool showFeedback = false,
+    bool share = false,
+  }) async {
+    if (_exportingCsv) {
+      return;
+    }
+    setState(() => _exportingCsv = true);
+    try {
+      final orders = await AdminRepository.fetchOrdersForDate(reportDate);
+      if (share) {
+        await exportAndShareDailySettlementCsvFiles(
+          reportDate: reportDate,
+          orders: orders,
+        );
+      } else {
+        buildAllDailySettlementCsvBundle(
+          reportDate: reportDate,
+          orders: orders,
+        );
+      }
+      if (showFeedback && mounted) {
+        final delivered = filterDeliveredOrders(orders).length;
+        final refunds = filterRefundOrders(orders).length;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              share
+                  ? 'ส่งออก CSV 4 ฝ่าย (${_formatReportDate(reportDate)}) — ส่งสำเร็จ $delivered • ขอคืนเงิน $refunds'
+                  : 'บันทึก CSV 4 ฝ่าย 18:00 แล้ว — ส่งสำเร็จ $delivered • ขอคืนเงิน $refunds',
+            ),
+          ),
+        );
+      }
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('ส่งออก CSV ไม่สำเร็จ: $error')),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _exportingCsv = false);
+      }
+    }
+  }
+
+  String _formatReportDate(DateTime value) {
+    final year = value.year.toString().padLeft(4, '0');
+    final month = value.month.toString().padLeft(2, '0');
+    final day = value.day.toString().padLeft(2, '0');
+    return '$day/$month/$year';
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -133,6 +224,50 @@ class OrderManagementScreen extends StatelessWidget {
         backgroundColor: const Color(0xFFE65100),
         foregroundColor: Colors.white,
         title: const Text('จัดการออเดอร์'),
+        actions: <Widget>[
+          if (_exportingCsv)
+            const Padding(
+              padding: EdgeInsets.only(right: 12),
+              child: Center(
+                child: SizedBox(
+                  width: 22,
+                  height: 22,
+                  child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                ),
+              ),
+            )
+          else
+            IconButton(
+              onPressed: () => _runDailyCsvExport(
+                DateTime.now(),
+                showFeedback: true,
+                share: true,
+              ),
+              tooltip: 'ส่งออก CSV 4 ฝ่ายวันนี้',
+              icon: const Icon(Icons.download_outlined),
+            ),
+        ],
+        bottom: TabBar(
+          controller: _tabController,
+          isScrollable: true,
+          indicatorColor: Colors.white,
+          labelColor: Colors.white,
+          unselectedLabelColor: const Color(0xFFFFE0B2),
+          tabs: _categories
+              .map(
+                (category) => Tab(
+                  child: StreamBuilder<List<AdminOrderRecord>>(
+                    stream: AdminRepository.streamOrders(),
+                    builder: (context, snapshot) {
+                      final orders = snapshot.data ?? const <AdminOrderRecord>[];
+                      final count = filterOrdersByCategory(orders, category).length;
+                      return Text('${category.label} ($count)');
+                    },
+                  ),
+                ),
+              )
+              .toList(growable: false),
+        ),
       ),
       body: StreamBuilder<List<AdminOrderRecord>>(
         stream: AdminRepository.streamOrders(),
@@ -145,15 +280,34 @@ class OrderManagementScreen extends StatelessWidget {
           }
 
           final orders = snapshot.data ?? <AdminOrderRecord>[];
-          if (orders.isEmpty) {
-            return const Center(child: Text('ยังไม่มีออเดอร์'));
-          }
-
-          return ListView.separated(
-            padding: const EdgeInsets.all(16),
-            itemCount: orders.length,
-            separatorBuilder: (_, __) => const SizedBox(height: 12),
-            itemBuilder: (context, index) => _OrderCard(order: orders[index]),
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: <Widget>[
+              Container(
+                color: const Color(0xFFFFF7ED),
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                child: Text(
+                  'สรุป CSV 4 ฝ่าย อัตโนมัติ 18:00 — ขาดส่ง / ค่าสินค้า / ขอคืนเงิน / ร้าน (หัก GP 18% + ไลด์เดอร์ 15%)',
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: const Color(0xFF9A3412),
+                        height: 1.35,
+                      ),
+                ),
+              ),
+              Expanded(
+                child: TabBarView(
+                  controller: _tabController,
+                  children: _categories
+                      .map(
+                        (category) => _OrderCategoryList(
+                          orders: filterOrdersByCategory(orders, category),
+                          emptyLabel: 'ไม่มีออเดอร์${category.label}',
+                        ),
+                      )
+                      .toList(growable: false),
+                ),
+              ),
+            ],
           );
         },
       ),
@@ -161,8 +315,67 @@ class OrderManagementScreen extends StatelessWidget {
   }
 }
 
-class _OrderCard extends StatelessWidget {
-  const _OrderCard({required this.order});
+class _OrderCategoryList extends StatelessWidget {
+  const _OrderCategoryList({
+    required this.orders,
+    required this.emptyLabel,
+  });
+
+  final List<AdminOrderRecord> orders;
+  final String emptyLabel;
+
+  @override
+  Widget build(BuildContext context) {
+    if (orders.isEmpty) {
+      return Center(child: Text(emptyLabel));
+    }
+
+    return ListView.separated(
+      padding: const EdgeInsets.all(16),
+      itemCount: orders.length,
+      separatorBuilder: (_, __) => const SizedBox(height: 8),
+      itemBuilder: (context, index) {
+        final order = orders[index];
+        return Material(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(16),
+          child: InkWell(
+            borderRadius: BorderRadius.circular(16),
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(
+                builder: (_) => AdminOrderDetailScreen(order: order),
+              ),
+            ),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: const Color(0xFFFFE0B2)),
+              ),
+              child: Row(
+                children: <Widget>[
+                  Expanded(
+                    child: Text(
+                      order.displayOrderNumber,
+                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                            fontWeight: FontWeight.w800,
+                            color: const Color(0xFF7C2D12),
+                          ),
+                    ),
+                  ),
+                  const Icon(Icons.chevron_right_rounded, color: Color(0xFFE65100)),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+class AdminOrderDetailScreen extends StatelessWidget {
+  const AdminOrderDetailScreen({super.key, required this.order});
 
   final AdminOrderRecord order;
 
@@ -211,6 +424,7 @@ class _OrderCard extends StatelessWidget {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('ยกเลิกออเดอร์และแจ้งเตือน van1/van2/van3 แล้ว')),
         );
+        Navigator.of(context).pop();
       }
     } catch (error) {
       if (context.mounted) {
@@ -225,9 +439,163 @@ class _OrderCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final category = resolveAdminOrderCategory(order);
     final isCancelled = order.status.toLowerCase() == 'cancelled';
+    final imageUrls = <String>{
+      if (order.shopImageUrl != null && order.shopImageUrl!.trim().isNotEmpty)
+        order.shopImageUrl!.trim(),
+      if (order.deliveryProofImageUrl != null &&
+          order.deliveryProofImageUrl!.trim().isNotEmpty)
+        order.deliveryProofImageUrl!.trim(),
+      ...order.items
+          .map((item) => item.imageUrl?.trim())
+          .whereType<String>()
+          .where((url) => url.isNotEmpty),
+    }.toList(growable: false);
 
+    return Scaffold(
+      appBar: AppBar(
+        backgroundColor: const Color(0xFFE65100),
+        foregroundColor: Colors.white,
+        title: Text(order.displayOrderNumber),
+      ),
+      body: ListView(
+        padding: const EdgeInsets.all(16),
+        children: <Widget>[
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: <Widget>[
+              _StatusChip(label: category.label),
+              _StatusChip(label: order.status),
+            ],
+          ),
+          const SizedBox(height: 16),
+          _detailSection(
+            context,
+            title: 'ข้อมูลออเดอร์',
+            lines: <String>[
+              'Order ID: ${order.id}',
+              if (order.orderCode != null) 'หมายเลข: ${order.orderCode}',
+              if (order.createdAt != null) 'สร้าง: ${_formatDateTime(order.createdAt!)}',
+              if (order.deliveredAt != null) 'ส่งสำเร็จ: ${_formatDateTime(order.deliveredAt!)}',
+              if (order.cancelledAt != null) 'ยกเลิก: ${_formatDateTime(order.cancelledAt!)}',
+              if (order.grandTotal != null) 'ยอดรวม: ฿${order.grandTotal!.toStringAsFixed(2)}',
+              if (order.subtotal != null) 'สินค้า: ฿${order.subtotal!.toStringAsFixed(2)}',
+              if (order.shippingFee != null) 'ค่าส่ง: ฿${order.shippingFee!.toStringAsFixed(2)}',
+              if (order.paymentMethod != null) 'ช่องทางชำระ: ${order.paymentMethod}',
+              if (order.paymentStatus != null) 'สถานะชำระ: ${order.paymentStatus}',
+              if (order.sourceApp != null) 'source: ${order.sourceApp}',
+              if (order.cancelReason != null) 'เหตุผลยกเลิก: ${order.cancelReason}',
+            ],
+          ),
+          const SizedBox(height: 12),
+          _detailSection(
+            context,
+            title: 'เชื่อมโยง van1 / van2 / van3',
+            child: Column(
+              children: <Widget>[
+                _LinkageRow(icon: Icons.storefront_outlined, appLabel: 'van1 ร้าน', value: order.van1Label),
+                const SizedBox(height: 6),
+                _LinkageRow(icon: Icons.person_outline, appLabel: 'van2 ลูกค้า', value: order.van2Label),
+                const SizedBox(height: 6),
+                _LinkageRow(
+                  icon: Icons.delivery_dining_outlined,
+                  appLabel: 'van3 ไรเดอร์',
+                  value: order.van3Label,
+                ),
+              ],
+            ),
+          ),
+          if (order.isRefundCase) ...<Widget>[
+            const SizedBox(height: 12),
+            _detailSection(
+              context,
+              title: 'ข้อมูลขอคืนเงิน',
+              lines: <String>[
+                if (order.refundStatus != null) 'สถานะ: ${order.refundStatus}',
+                if (order.refundBankName != null) 'ธนาคาร: ${order.refundBankName}',
+                if (order.refundAccountName != null) 'ชื่อบัญชี: ${order.refundAccountName}',
+                if (order.refundBankAccountNumber != null)
+                  'เลขบัญชี: ${order.refundBankAccountNumber}',
+              ],
+            ),
+          ],
+          if (order.items.isNotEmpty) ...<Widget>[
+            const SizedBox(height: 12),
+            _detailSection(
+              context,
+              title: 'รายการสินค้า (${order.items.length})',
+              child: Column(
+                children: order.items.map((item) {
+                  return Padding(
+                    padding: const EdgeInsets.only(bottom: 10),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: <Widget>[
+                        _OrderImageThumb(url: item.imageUrl),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: <Widget>[
+                              Text(item.name, style: const TextStyle(fontWeight: FontWeight.w700)),
+                              Text(
+                                'x${item.quantity}'
+                                '${item.unitPrice != null ? ' • ฿${item.unitPrice!.toStringAsFixed(2)}' : ''}'
+                                '${item.lineTotal != null ? ' • รวม ฿${item.lineTotal!.toStringAsFixed(2)}' : ''}',
+                                style: _mutedStyle(context),
+                              ),
+                              if (item.note != null && item.note!.isNotEmpty)
+                                Text(item.note!, style: _mutedStyle(context)),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  );
+                }).toList(growable: false),
+              ),
+            ),
+          ],
+          if (imageUrls.isNotEmpty) ...<Widget>[
+            const SizedBox(height: 12),
+            _detailSection(
+              context,
+              title: 'รูปภาพ',
+              child: Wrap(
+                spacing: 10,
+                runSpacing: 10,
+                children: imageUrls
+                    .map((url) => _OrderImagePreview(url: url))
+                    .toList(growable: false),
+              ),
+            ),
+          ],
+          if (!isCancelled && category != AdminOrderCategory.refund) ...<Widget>[
+            const SizedBox(height: 20),
+            Align(
+              alignment: Alignment.centerRight,
+              child: OutlinedButton.icon(
+                onPressed: () => _cancelOrder(context),
+                icon: const Icon(Icons.cancel_outlined, size: 18),
+                label: const Text('ยกเลิกโดยแอดมิน'),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _detailSection(
+    BuildContext context, {
+    required String title,
+    List<String>? lines,
+    Widget? child,
+  }) {
     return Container(
+      width: double.infinity,
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: Colors.white,
@@ -239,65 +607,60 @@ class _OrderCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
-          Row(
-            children: <Widget>[
-              Expanded(
-                child: Text(
-                  'ออเดอร์ #${order.id}',
-                  style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800),
-                ),
-              ),
-              _StatusChip(label: order.status),
-            ],
+          Text(
+            title,
+            style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800),
           ),
-          if (order.createdAt != null) ...<Widget>[
-            const SizedBox(height: 4),
-            Text('สร้าง: ${_formatDateTime(order.createdAt!)}', style: _mutedStyle(context)),
-          ],
-          if (order.grandTotal != null) ...<Widget>[
-            const SizedBox(height: 4),
-            Text('ยอดรวม: ฿${order.grandTotal!.toStringAsFixed(2)}', style: _mutedStyle(context)),
-          ],
-          const SizedBox(height: 12),
-          _LinkageRow(
-            icon: Icons.storefront_outlined,
-            appLabel: 'van1 ร้าน',
-            value: order.van1Label,
-          ),
-          const SizedBox(height: 6),
-          _LinkageRow(
-            icon: Icons.person_outline,
-            appLabel: 'van2 ลูกค้า',
-            value: order.van2Label,
-          ),
-          const SizedBox(height: 6),
-          _LinkageRow(
-            icon: Icons.delivery_dining_outlined,
-            appLabel: 'van3 ไรเดอร์',
-            value: order.van3Label,
-          ),
-          if (order.sourceApp != null || order.paymentStatus != null) ...<Widget>[
-            const SizedBox(height: 8),
-            Text(
-              [
-                if (order.sourceApp != null) 'source: ${order.sourceApp}',
-                if (order.paymentStatus != null) 'ชำระ: ${order.paymentStatus}',
-              ].join(' • '),
-              style: _mutedStyle(context),
-            ),
-          ],
-          if (!isCancelled) ...<Widget>[
-            const SizedBox(height: 12),
-            Align(
-              alignment: Alignment.centerRight,
-              child: OutlinedButton.icon(
-                onPressed: () => _cancelOrder(context),
-                icon: const Icon(Icons.cancel_outlined, size: 18),
-                label: const Text('ยกเลิกโดยแอดมิน'),
+          const SizedBox(height: 10),
+          if (lines != null)
+            ...lines.map(
+              (line) => Padding(
+                padding: const EdgeInsets.only(bottom: 4),
+                child: Text(line, style: _mutedStyle(context)),
               ),
             ),
-          ],
+          if (child != null) child,
         ],
+      ),
+    );
+  }
+}
+
+class _OrderImageThumb extends StatelessWidget {
+  const _OrderImageThumb({this.url});
+
+  final String? url;
+
+  @override
+  Widget build(BuildContext context) {
+    return AdminSafeAvatar(imageUrl: url, size: 56, borderRadius: 12);
+  }
+}
+
+class _OrderImagePreview extends StatelessWidget {
+  const _OrderImagePreview({required this.url});
+
+  final String url;
+
+  @override
+  Widget build(BuildContext context) {
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(16),
+      child: InkWell(
+        onTap: () => showDialog<void>(
+          context: context,
+          builder: (_) => Dialog(
+            child: InteractiveViewer(
+              child: Image.network(url, fit: BoxFit.contain),
+            ),
+          ),
+        ),
+        child: AdminSafeNetworkImage(
+          url: url,
+          width: 120,
+          height: 120,
+          borderRadius: BorderRadius.circular(16),
+        ),
       ),
     );
   }
@@ -323,167 +686,6 @@ class _LinkageRow extends StatelessWidget {
         Text('$appLabel: ', style: const TextStyle(fontWeight: FontWeight.w600)),
         Expanded(child: Text(value, overflow: TextOverflow.ellipsis)),
       ],
-    );
-  }
-}
-
-class ShopManagementScreen extends StatelessWidget {
-  const ShopManagementScreen({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        backgroundColor: const Color(0xFFE65100),
-        foregroundColor: Colors.white,
-        title: const Text('จัดการร้านค้า'),
-      ),
-      body: StreamBuilder<List<AdminShopRecord>>(
-        stream: AdminRepository.streamShops(),
-        builder: (context, snapshot) {
-          if (snapshot.connectionState == ConnectionState.waiting && !snapshot.hasData) {
-            return const Center(child: CircularProgressIndicator());
-          }
-          if (snapshot.hasError) {
-            return Center(child: Text('โหลดข้อมูลไม่สำเร็จ: ${snapshot.error}'));
-          }
-
-          final shops = snapshot.data ?? <AdminShopRecord>[];
-          if (shops.isEmpty) {
-            return const Center(child: Text('ยังไม่พบข้อมูลร้านค้า'));
-          }
-
-          return ListView.separated(
-            padding: const EdgeInsets.all(16),
-            itemCount: shops.length,
-            separatorBuilder: (_, __) => const SizedBox(height: 12),
-            itemBuilder: (context, index) => _ShopCard(shop: shops[index]),
-          );
-        },
-      ),
-    );
-  }
-}
-
-class _ShopCard extends StatelessWidget {
-  const _ShopCard({required this.shop});
-
-  final AdminShopRecord shop;
-
-  Future<void> _approve(BuildContext context) async {
-    final adminUid = FirebaseAuth.instance.currentUser?.uid;
-    if (adminUid == null) {
-      return;
-    }
-
-    try {
-      await AdminRepository.approveShop(shop: shop, adminUid: adminUid);
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('อนุมัติ ${shop.displayName} แล้ว — แจ้ง van1 + เปิด public_shops')),
-        );
-      }
-    } catch (error) {
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('อนุมัติไม่สำเร็จ: $error')));
-      }
-    }
-  }
-
-  Future<void> _reject(BuildContext context) async {
-    final reasonController = TextEditingController();
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: Text('ปฏิเสธ ${shop.displayName}'),
-        content: TextField(
-          controller: reasonController,
-          decoration: const InputDecoration(
-            labelText: 'เหตุผล',
-            border: OutlineInputBorder(),
-          ),
-          maxLines: 3,
-        ),
-        actions: <Widget>[
-          TextButton(onPressed: () => Navigator.pop(dialogContext, false), child: const Text('ปิด')),
-          FilledButton(onPressed: () => Navigator.pop(dialogContext, true), child: const Text('ปฏิเสธ')),
-        ],
-      ),
-    );
-
-    if (confirmed != true || !context.mounted) {
-      reasonController.dispose();
-      return;
-    }
-
-    final adminUid = FirebaseAuth.instance.currentUser?.uid;
-    if (adminUid == null) {
-      reasonController.dispose();
-      return;
-    }
-
-    try {
-      await AdminRepository.rejectShop(
-        shop: shop,
-        adminUid: adminUid,
-        reason: reasonController.text,
-      );
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('ปฏิเสธ ${shop.displayName} และแจ้ง van1 แล้ว')),
-        );
-      }
-    } catch (error) {
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('ปฏิเสธไม่สำเร็จ: $error')));
-      }
-    } finally {
-      reasonController.dispose();
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return _AdminInfoCard(
-      title: shop.displayName,
-      subtitle: '${shop.serviceType} • ${shop.status}',
-      imageUrl: shop.imageUrl,
-      statusChip: _StatusChip(
-        label: shop.isApproved
-            ? 'approved'
-            : shop.isRejected
-                ? 'rejected'
-                : shop.isPendingReview
-                    ? 'pending'
-                    : shop.status,
-      ),
-      detailLines: <String>[
-        'เจ้าของ (van1): ${shop.ownerId}',
-        if (shop.phone != null) 'โทร: ${shop.phone}',
-        if (shop.email != null) 'อีเมล: ${shop.email}',
-        if (shop.address != null) 'ที่อยู่: ${shop.address}',
-        'แหล่งข้อมูล: ${shop.collection}',
-        'โปรไฟล์ครบ: ${shop.isProfileCompleted ? 'ใช่' : 'ยังไม่ครบ'}',
-        if (shop.createdAt != null) 'อัปเดต: ${_formatDateTime(shop.createdAt!)}',
-      ],
-      actions: shop.isApproved
-          ? null
-          : <Widget>[
-              if (!shop.isRejected)
-                FilledButton.icon(
-                  onPressed: () => _approve(context),
-                  style: FilledButton.styleFrom(backgroundColor: const Color(0xFF16A34A)),
-                  icon: const Icon(Icons.check_circle_outline, size: 18),
-                  label: const Text('อนุมัติ'),
-                ),
-              if (!shop.isRejected) const SizedBox(width: 8),
-              if (!shop.isRejected)
-                OutlinedButton.icon(
-                  onPressed: () => _reject(context),
-                  icon: const Icon(Icons.block_outlined, size: 18),
-                  label: const Text('ปฏิเสธ'),
-                ),
-            ],
     );
   }
 }
@@ -696,20 +898,7 @@ class _AdminInfoCard extends StatelessWidget {
           Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: <Widget>[
-              Container(
-                width: 56,
-                height: 56,
-                decoration: BoxDecoration(
-                  color: const Color(0xFFFFEDD5),
-                  borderRadius: BorderRadius.circular(16),
-                  image: imageUrl != null && imageUrl!.trim().isNotEmpty
-                      ? DecorationImage(image: NetworkImage(imageUrl!.trim()), fit: BoxFit.cover)
-                      : null,
-                ),
-                child: imageUrl != null && imageUrl!.trim().isNotEmpty
-                    ? null
-                    : const Icon(Icons.inventory_2_outlined, color: Color(0xFFE65100)),
-              ),
+              AdminSafeAvatar(imageUrl: imageUrl),
               const SizedBox(width: 14),
               Expanded(
                 child: Column(
@@ -766,10 +955,19 @@ class _StatusChip extends StatelessWidget {
     final normalized = label.toLowerCase();
     Color bg;
     Color fg;
-    if (normalized.contains('approve') || normalized == 'online' || normalized == 'completed') {
+    if (normalized.contains('approve') ||
+        normalized == 'online' ||
+        normalized == 'completed' ||
+        normalized == 'delivered' ||
+        normalized == 'สำเร็จ') {
       bg = const Color(0xFFDCFCE7);
       fg = const Color(0xFF166534);
-    } else if (normalized.contains('reject') || normalized == 'cancelled' || normalized == 'offline') {
+    } else if (normalized.contains('reject') ||
+        normalized == 'cancelled' ||
+        normalized == 'offline' ||
+        normalized == 'refund' ||
+        normalized == 'ยกเลิก' ||
+        normalized == 'ขอคืนเงิน') {
       bg = const Color(0xFFFEE2E2);
       fg = const Color(0xFF991B1B);
     } else if (normalized.contains('pending')) {

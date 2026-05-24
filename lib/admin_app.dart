@@ -1,8 +1,11 @@
+import 'dart:async';
+
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
 import 'admin_repository.dart';
 import 'admin_screens.dart';
+import 'services/admin_illegal_product_alert_service.dart';
 
 class VanMarketAdminApp extends StatelessWidget {
   const VanMarketAdminApp({super.key});
@@ -38,8 +41,8 @@ class AdminAuthGate extends StatelessWidget {
           return const AdminLoginScreen();
         }
 
-        return FutureBuilder<bool>(
-          future: AdminRepository.isAdmin(user.uid),
+        return FutureBuilder<AdminAccessCheck>(
+          future: AdminRepository.checkAdminAccess(),
           builder: (context, adminSnapshot) {
             if (adminSnapshot.connectionState == ConnectionState.waiting) {
               return const _AdminLoadingScreen(
@@ -47,11 +50,16 @@ class AdminAuthGate extends StatelessWidget {
               );
             }
 
-            if (adminSnapshot.data == true) {
-              return AdminHomeScreen(user: user);
+            if (adminSnapshot.data?.allowed == true) {
+              return _AdminIllegalProductAlertHost(
+                child: AdminHomeScreen(user: user),
+              );
             }
 
-            return _AdminAccessDeniedScreen(user: user);
+            return _AdminAccessDeniedScreen(
+              user: user,
+              reason: adminSnapshot.data?.reason,
+            );
           },
         );
       },
@@ -164,7 +172,7 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
                       ),
                       const SizedBox(height: 8),
                       Text(
-                        'ใช้บัญชี Firebase ที่มีอีเมลอยู่ใน collection แอดมิน',
+                        'ใช้บัญชี Firebase ที่มีอีเมลอยู่ใน collection admins (แอดมิน)',
                         style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                           color: const Color(0xFF6B7280),
                         ),
@@ -283,9 +291,10 @@ class _AdminLoadingScreen extends StatelessWidget {
 }
 
 class _AdminAccessDeniedScreen extends StatelessWidget {
-  const _AdminAccessDeniedScreen({required this.user});
+  const _AdminAccessDeniedScreen({required this.user, this.reason});
 
   final User user;
+  final String? reason;
 
   Future<void> _signOut() async {
     await FirebaseAuth.instance.signOut();
@@ -293,6 +302,14 @@ class _AdminAccessDeniedScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final reasonText = reason?.trim() ?? '';
+    final isFirestoreConnectionError =
+        reasonText.contains('Unable to establish connection') ||
+        reasonText.contains('อ่าน Firestore ไม่ได้');
+    final title = isFirestoreConnectionError
+        ? 'เชื่อมต่อ Firestore ไม่ได้'
+        : 'อีเมลนี้ยังไม่อยู่ใน collection admins (แอดมิน)';
+
     return Scaffold(
       body: Center(
         child: Padding(
@@ -309,7 +326,7 @@ class _AdminAccessDeniedScreen extends StatelessWidget {
                 ),
                 const SizedBox(height: 16),
                 Text(
-                  'อีเมลนี้ยังไม่อยู่ใน collection แอดมิน',
+                  title,
                   style: Theme.of(context).textTheme.headlineSmall?.copyWith(
                     fontWeight: FontWeight.w800,
                   ),
@@ -320,6 +337,26 @@ class _AdminAccessDeniedScreen extends StatelessWidget {
                   user.email ?? user.uid,
                   textAlign: TextAlign.center,
                   style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                    color: const Color(0xFF6B7280),
+                  ),
+                ),
+                if (reason != null && reason!.trim().isNotEmpty) ...<Widget>[
+                  const SizedBox(height: 12),
+                  Text(
+                    reason!,
+                    textAlign: TextAlign.center,
+                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                      color: const Color(0xFFB45309),
+                    ),
+                  ),
+                ],
+                const SizedBox(height: 8),
+                Text(
+                  isFirestoreConnectionError
+                      ? 'ล็อกอินสำเร็จแล้ว แต่แอปอ่าน Firestore ไม่ได้ — ปิดแอปแล้วรันใหม่ด้วย flutter run (ไม่ใช่ hot reload)'
+                      : 'ถ้ายังเห็นข้อความเก่า ให้ rebuild แอป van4 จากโค้ดล่าสุด',
+                  textAlign: TextAlign.center,
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
                     color: const Color(0xFF6B7280),
                   ),
                 ),
@@ -335,4 +372,32 @@ class _AdminAccessDeniedScreen extends StatelessWidget {
       ),
     );
   }
+}
+
+class _AdminIllegalProductAlertHost extends StatefulWidget {
+  const _AdminIllegalProductAlertHost({required this.child});
+
+  final Widget child;
+
+  @override
+  State<_AdminIllegalProductAlertHost> createState() =>
+      _AdminIllegalProductAlertHostState();
+}
+
+class _AdminIllegalProductAlertHostState
+    extends State<_AdminIllegalProductAlertHost> {
+  @override
+  void initState() {
+    super.initState();
+    unawaited(AdminIllegalProductAlertService.instance.startMonitoring());
+  }
+
+  @override
+  void dispose() {
+    unawaited(AdminIllegalProductAlertService.instance.stopMonitoring());
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => widget.child;
 }
