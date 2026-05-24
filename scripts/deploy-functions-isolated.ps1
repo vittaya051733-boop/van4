@@ -1,4 +1,12 @@
 $ErrorActionPreference = 'Stop'
+$importScript = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..\van2\scripts\deploy-governance-import.ps1'))
+. $importScript -CallingScriptRoot $PSScriptRoot
 
-Write-Error 'BLOCKED: van4 has no isolated Cloud Functions codebase in firebase.json. Do not deploy functions from van4; use the owning app/codebase script for the specific function instead.'
-exit 1
+$cfg = Get-VanGovernanceConfig
+throw @"
+BLOCKED: van4 has no Cloud Functions codebase.
+Deploy functions only from the owning app:
+  van1: $($cfg.Apps.van1.Root)\scripts\deploy-functions-isolated.ps1
+  van2: $($cfg.Apps.van2.Root)\scripts\deploy-functions-isolated.ps1
+See: van2\scripts\DEPLOY_GOVERNANCE.md
+"@

@@ -12,6 +12,8 @@ class AdminRepository {
     'shop_registrations',
     'restaurant_registrations',
     'pharmacy_registrations',
+    'agriculture_registrations',
+    'other_registrations',
   ];
 
   static Future<bool> isAdmin(String uid) async {

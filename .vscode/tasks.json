@@ -2,93 +2,43 @@
   "version": "2.0.0",
   "tasks": [
     {
+      "label": "Deploy Help — Safe Deploy Governance",
+      "type": "shell",
+      "command": "powershell",
+      "args": ["-ExecutionPolicy", "Bypass", "-File", "..\\van2\\scripts\\deploy-safe.ps1", "-Action", "help"],
+      "problemMatcher": []
+    },
+    {
+      "label": "Preflight — Storage (van4)",
+      "type": "shell",
+      "command": "powershell",
+      "args": ["-ExecutionPolicy", "Bypass", "-File", "..\\van2\\scripts\\deploy-preflight.ps1", "-App", "van4", "-Target", "storage"],
+      "problemMatcher": []
+    },
+    {
       "label": "Deploy Storage Isolated (van4)",
       "type": "shell",
       "command": "powershell",
       "args": [
-        "-ExecutionPolicy",
-        "Bypass",
-        "-File",
-        "scripts/deploy-storage-isolated.ps1"
+        "-ExecutionPolicy", "Bypass", "-File", "scripts\\deploy-storage-isolated.ps1",
+        "-ConfirmDeploy", "APPROVE:van4:van-merchant",
+        "-ConfirmFile", "storage.rules",
+        "-ConfirmImpact", "SELF:van4",
+        "-InteractiveConfirm"
       ],
-      "options": {
-        "cwd": "${workspaceFolder}"
-      },
       "problemMatcher": []
     },
     {
-      "label": "Deploy Firestore Isolated (van4)",
+      "label": "Deploy Firestore Isolated DB (van4 only — SELF)",
       "type": "shell",
       "command": "powershell",
       "args": [
-        "-ExecutionPolicy",
-        "Bypass",
-        "-File",
-        "scripts/deploy-firestore-isolated.ps1"
+        "-ExecutionPolicy", "Bypass", "-File", "scripts\\deploy-firestore-isolated.ps1",
+        "-ConfirmDeploy", "APPROVE:van4:van-merchant",
+        "-ConfirmFile", "firestore.rules",
+        "-ConfirmImpact", "SELF:van4",
+        "-InteractiveConfirm"
       ],
-      "options": {
-        "cwd": "${workspaceFolder}"
-      },
-      "problemMatcher": []
-    },
-    {
-      "label": "Deploy Isolated (van4)",
-      "type": "shell",
-      "command": "powershell",
-      "args": [
-        "-ExecutionPolicy",
-        "Bypass",
-        "-File",
-        "scripts/deploy-isolated.ps1"
-      ],
-      "options": {
-        "cwd": "${workspaceFolder}"
-      },
-      "problemMatcher": []
-    },
-    {
-      "label": "DO NOT USE - Deploy Rules (van-merchant)",
-      "type": "shell",
-      "command": "powershell",
-      "args": [
-        "-ExecutionPolicy",
-        "Bypass",
-        "-File",
-        "scripts/deploy-van-merchant-rules.ps1"
-      ],
-      "options": {
-        "cwd": "${workspaceFolder}"
-      },
-      "problemMatcher": []
-    },
-    {
-      "label": "DO NOT USE - Deploy Functions (van4 blocked)",
-      "type": "shell",
-      "command": "powershell",
-      "args": [
-        "-ExecutionPolicy",
-        "Bypass",
-        "-File",
-        "scripts/deploy-functions-isolated.ps1"
-      ],
-      "options": {
-        "cwd": "${workspaceFolder}"
-      },
-      "problemMatcher": []
-    },
-    {
-      "label": "Run van4 on emulator-5556",
-      "type": "shell",
-      "command": "flutter",
-      "args": [
-        "run",
-        "-d",
-        "emulator-5556"
-      ],
-      "options": {
-        "cwd": "${workspaceFolder}"
-      },
-      "isBackground": true,
       "problemMatcher": []
     }
   ]

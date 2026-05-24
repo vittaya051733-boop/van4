@@ -1,47 +1,58 @@
+param(
+  [string]$ConfirmDeploy,
+  [string]$ConfirmFile,
+  [string]$ConfirmImpact,
+  [switch]$InteractiveConfirm,
+  [string]$FinalAcknowledge,
+  [switch]$DryRun,
+  [string]$DatabaseId = 'van4'
+)
+
 $ErrorActionPreference = 'Stop'
-$scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
-$appRoot = Split-Path -Parent $scriptRoot
+$importScript = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..\van2\scripts\deploy-governance-import.ps1'))
+. $importScript -CallingScriptRoot $PSScriptRoot
+
+$cfg = Get-VanGovernanceConfig
+$appCfg = $cfg.Apps['van4']
+$appRoot = $appCfg.Root
+$rulesFile = 'firestore.rules'
 Set-Location $appRoot
 
+Invoke-VanDeployGuardSession `
+  -App 'van4' `
+  -ConfirmDeploy $ConfirmDeploy `
+  -ConfirmFile $ConfirmFile `
+  -ExpectedFile $rulesFile `
+  -ConfirmImpact $ConfirmImpact `
+  -ExpectedImpact 'SELF:van4' `
+  -FinalAcknowledge $FinalAcknowledge `
+  -InteractiveConfirm:$InteractiveConfirm
 
-$expectedProjectId = 'van-merchant'
-$databaseId = 'van4'
-$rulesFile = 'firestore.rules'
-
-if (-not (Get-Command firebase -ErrorAction SilentlyContinue)) {
-  Write-Error 'Firebase CLI was not found in PATH.'
-  exit 1
+if (-not $appCfg.CanDeployIsolatedFirestore) {
+  throw 'van4 isolated Firestore deploy is disabled in governance config.'
 }
 
-if (-not (Test-Path '.firebaserc')) {
-  Write-Error 'Missing .firebaserc.'
-  exit 1
-}
+Write-Host "[guard] van4 deploys ONLY to isolated database '$DatabaseId' (not default/shared)." -ForegroundColor DarkYellow
 
 if (-not (Test-Path $rulesFile)) {
-  Write-Error "Missing rules file: $rulesFile"
-  exit 1
-}
-
-$rc = Get-Content '.firebaserc' -Raw | ConvertFrom-Json
-$projectId = $rc.projects.default
-if ($projectId -ne $expectedProjectId) {
-  Write-Error "Configured project '$projectId' does not match expected '$expectedProjectId'."
-  exit 1
+  throw "Missing rules file: $rulesFile"
 }
 
 $tempConfig = '.firebase.firestore.van4.tmp.json'
-$config = @{
+@{
   firestore = @{
-    database = $databaseId
-    rules = $rulesFile
+    database = $DatabaseId
+    rules    = $rulesFile
   }
-}
-$config | ConvertTo-Json -Depth 5 | Set-Content -Path $tempConfig -Encoding UTF8
+} | ConvertTo-Json -Depth 5 | Set-Content -Path $tempConfig -Encoding UTF8
 
 try {
-  Write-Host "Deploying Firestore rules to database '$databaseId' in project '$expectedProjectId'" -ForegroundColor Cyan
-  firebase deploy --project $expectedProjectId --only firestore --config $tempConfig
+  Write-Host "Deploying van4 Firestore rules to database '$DatabaseId' (SELF:van4)" -ForegroundColor Cyan
+  if ($DryRun) {
+    Write-Host '[dry-run] Skipping firebase deploy for isolated firestore database.' -ForegroundColor Yellow
+    return
+  }
+  firebase deploy --project $cfg.ProjectId --only firestore --config $tempConfig
 }
 finally {
   if (Test-Path $tempConfig) {
