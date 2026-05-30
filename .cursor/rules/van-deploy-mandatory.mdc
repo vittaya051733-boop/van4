@@ -1,0 +1,25 @@
+---
+description: MANDATORY — อ่านก่อน deploy Firebase ทุกครั้ง (van4 Admin)
+alwaysApply: true
+---
+
+# ห้าม Deploy โดยไม่อ่านกฎ (van4 — Admin)
+
+**ก่อนรัน deploy ใดๆ** ให้อ่าน:
+1. `..\van2\scripts\DEPLOY_GOVERNANCE.md`
+2. `..\van2\scripts\DEPLOY_RISK_MATRIX.md`
+
+## van4
+
+| ทำได้ (SELF) | ห้าม |
+|-------------|------|
+| storage, hosting | Firestore **default** DB (SHARED) |
+| firestore-van4 (DB แยก) | Functions |
+| | `firebase deploy` แบบ raw |
+
+## คำสั่งเดียวที่ถูก
+
+```powershell
+..\van2\scripts\deploy-self.ps1 -App van4 -Target storage -ConfirmDeploy "APPROVE:van4:van-merchant" -FinalAcknowledge "YES I UNDERSTAND"
+..\van2\scripts\deploy-self.ps1 -App van4 -Target firestore-van4 -ConfirmDeploy "APPROVE:van4:van-merchant" -FinalAcknowledge "YES I UNDERSTAND"
+```

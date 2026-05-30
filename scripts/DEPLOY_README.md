@@ -1,13 +1,12 @@
-# Deploy governance
+# Deploy (van4 Admin)
 
-All deploy scripts in this app use the shared manifest:
-
-`Desktop\van2\scripts\deploy-governance.ps1`
-
-Quick help:
+**อ่านก่อน deploy ทุกครั้ง:**
+- `..\van2\scripts\DEPLOY_GOVERNANCE.md`
+- `..\van2\scripts\DEPLOY_RISK_MATRIX.md`
 
 ```powershell
-..\..\van2\scripts\deploy-safe.ps1 -Action help
+..\van2\scripts\deploy-self.ps1 -App van4 -Target storage `
+  -ConfirmDeploy "APPROVE:van4:van-merchant" -FinalAcknowledge "YES I UNDERSTAND"
 ```
 
-See full guide: `Desktop\van2\scripts\DEPLOY_GOVERNANCE.md`
+Manifest: `..\van2\scripts\deploy-governance.ps1`

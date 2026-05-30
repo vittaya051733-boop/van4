@@ -420,6 +420,48 @@ class AdminRepository {
         .map((snapshot) => _sortProducts(snapshot.docs));
   }
 
+  static const String platformCatalogCollection = 'platform_catalog';
+  static const String homeShelvesDocId = 'home_shelves';
+
+  static Stream<List<String>> streamHomeFeaturedProductIds() {
+    return _firestore
+        .collection(platformCatalogCollection)
+        .doc(homeShelvesDocId)
+        .snapshots()
+        .map((snapshot) {
+      final raw = snapshot.data()?['featuredProductIds'];
+      if (raw is! List) {
+        return <String>[];
+      }
+      return raw
+          .map((entry) => entry.toString().trim())
+          .where((entry) => entry.isNotEmpty)
+          .toList(growable: false);
+    });
+  }
+
+  static Stream<List<AdminProductRecord>> streamActiveProductsForHomePicker() {
+    return _firestore
+        .collection('products')
+        .where('isActive', isEqualTo: true)
+        .snapshots()
+        .map((snapshot) => _sortProducts(snapshot.docs));
+  }
+
+  static Future<void> saveHomeFeaturedProductIds({
+    required List<String> productIds,
+    required String adminEmail,
+  }) async {
+    await _firestore
+        .collection(platformCatalogCollection)
+        .doc(homeShelvesDocId)
+        .set(<String, dynamic>{
+      'featuredProductIds': productIds,
+      'featuredUpdatedAt': FieldValue.serverTimestamp(),
+      'featuredUpdatedBy': adminEmail,
+    }, SetOptions(merge: true));
+  }
+
   /// สินค้าที่ AI ประเมินว่าไม่ถูกกฎหมาย — รอแอดมินอนุมัติ (ยังไม่อยู่ใน products)
   static Stream<List<AdminProductRecord>> streamIllegalAiProducts() {
     return _firestore

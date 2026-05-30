@@ -1,6 +1,7 @@
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
+import 'admin_home_shelves_screen.dart';
 import 'admin_image_widgets.dart';
 import 'admin_order_support.dart';
 import 'admin_repository.dart';
@@ -82,6 +83,17 @@ class AdminHomeScreen extends StatelessWidget {
             subtitle: 'แยกสำเร็จ/ไม่สำเร็จ/ยกเลิก/ขอคืนเงิน + CSV 4 ฝ่าย 18:00',
             onTap: () => Navigator.of(context).push(
               MaterialPageRoute<void>(builder: (_) => const OrderManagementScreen()),
+            ),
+          ),
+          const SizedBox(height: 12),
+          _AdminPrimaryButton(
+            icon: Icons.recommend_outlined,
+            title: 'สินค้าแนะนำหน้าแรก',
+            subtitle: 'เลือกสินค้าที่แสดงในชั้น "สินค้าแนะนำ" บน van2',
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(
+                builder: (_) => const AdminHomeShelvesScreen(),
+              ),
             ),
           ),
           const SizedBox(height: 12),
