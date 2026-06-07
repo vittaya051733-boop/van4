@@ -1,7 +1,9 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_storage/firebase_storage.dart';
 
 class AdminAccessCheck {
   const AdminAccessCheck({
@@ -462,7 +464,16 @@ class AdminRepository {
     }, SetOptions(merge: true));
   }
 
-  /// สินค้าที่ AI ประเมินว่าไม่ถูกกฎหมาย — รอแอดมินอนุมัติ (ยังไม่อยู่ใน products)
+  /// สินค้าที่ AI ประเมินว่าต้องให้แอดมินตรวจสอบก่อน (ผิดกฎหมายหรือความมั่นใจต่ำ)
+  static Stream<List<AdminProductRecord>> streamPendingAiProductReviews() {
+    return _firestore
+        .collection('product_admin_reviews')
+        .where('adminReviewStatus', isEqualTo: 'pending')
+        .snapshots()
+        .map((snapshot) => _sortProducts(snapshot.docs));
+  }
+
+  /// @deprecated ใช้ [streamPendingAiProductReviews] แทน
   static Stream<List<AdminProductRecord>> streamIllegalAiProducts() {
     return _firestore
         .collection('product_admin_reviews')
@@ -672,16 +683,11 @@ class AdminShopMediaSettings {
   final String? shopImageUrl;
 
   static int defaultMaxImagesFor(String? serviceType) {
-    final normalized = (serviceType ?? '').trim();
-    if (normalized.contains('ร้านค้า')) {
-      return 10;
-    }
     return 1;
   }
 
   static bool defaultCanUploadVideo(String? serviceType) {
-    final normalized = (serviceType ?? '').trim();
-    return normalized.contains('ร้านค้า');
+    return false;
   }
 
   factory AdminShopMediaSettings.fromMap(Map<String, dynamic>? data) {
@@ -717,6 +723,8 @@ class AdminProductRecord {
     this.shopName,
     this.aiIsLegalInThailand,
     this.aiLegalAnalysisReason,
+    this.aiRequiresAdminReview,
+    this.aiReviewReasonLabels,
     this.adminReviewStatus,
     this.reviewType,
     this.targetProductId,
@@ -735,12 +743,33 @@ class AdminProductRecord {
   final String? shopName;
   final bool? aiIsLegalInThailand;
   final String? aiLegalAnalysisReason;
+  final bool? aiRequiresAdminReview;
+  final List<String>? aiReviewReasonLabels;
   final String? adminReviewStatus;
   final String? reviewType;
   final String? targetProductId;
 
   bool get isAiIllegalInThailand => aiIsLegalInThailand == false;
   bool get isPendingAdminReview => adminReviewStatus == 'pending';
+  bool get needsLowConfidenceReview =>
+      aiRequiresAdminReview == true && aiIsLegalInThailand != false;
+
+  String get aiReviewSummary {
+    if (isAiIllegalInThailand) {
+      final reason = (aiLegalAnalysisReason ?? '').trim();
+      return reason.isNotEmpty
+          ? reason
+          : 'AI ประเมินว่าสินค้านี้อาจผิดกฎหมาย';
+    }
+    if (needsLowConfidenceReview) {
+      final labels = aiReviewReasonLabels ?? const <String>[];
+      if (labels.isNotEmpty) {
+        return 'ความมั่นใจต่ำกว่า 80%: ${labels.join(', ')}';
+      }
+      return 'AI ประเมินความมั่นใจต่ำกว่า 80%';
+    }
+    return 'รอแอดมินตรวจสอบ';
+  }
 
   factory AdminProductRecord.fromSnapshot(QueryDocumentSnapshot<Map<String, dynamic>> doc) {
     final data = doc.data();
@@ -768,6 +797,15 @@ class AdminProductRecord {
           : null,
       aiLegalAnalysisReason:
           _firstString(data, const <String>['aiLegalAnalysisReason']),
+      aiRequiresAdminReview: data['aiRequiresAdminReview'] is bool
+          ? data['aiRequiresAdminReview'] as bool
+          : null,
+      aiReviewReasonLabels: data['aiReviewReasonLabels'] is List
+          ? data['aiReviewReasonLabels']
+              .map((item) => item.toString().trim())
+              .where((item) => item.isNotEmpty)
+              .toList(growable: false)
+          : null,
       adminReviewStatus: _firstString(data, const <String>['adminReviewStatus']),
       reviewType: _firstString(data, const <String>['reviewType']),
       targetProductId: _firstString(data, const <String>['targetProductId']),
@@ -1148,4 +1186,435 @@ double? _toDouble(Object? value) {
     return double.tryParse(value);
   }
   return null;
+}
+
+class AdminSupportTicket {
+  AdminSupportTicket({
+    required this.id,
+    required this.sourceApp,
+    required this.sourceLabel,
+    required this.requesterUid,
+    required this.requesterName,
+    this.requesterEmail,
+    required this.topicKey,
+    required this.topicLabel,
+    required this.message,
+    required this.imageUrls,
+    required this.status,
+    this.createdAt,
+    this.updatedAt,
+    this.unreadForAdmin = false,
+    this.requesterPhone,
+    this.lastMessagePreview,
+    this.contactClosed = false,
+  });
+
+  factory AdminSupportTicket.fromDoc(
+    DocumentSnapshot<Map<String, dynamic>> doc,
+  ) {
+    final data = doc.data() ?? <String, dynamic>{};
+    return AdminSupportTicket(
+      id: doc.id,
+      sourceApp: (data['sourceApp'] as String?)?.trim() ?? '',
+      sourceLabel: (data['sourceLabel'] as String?)?.trim() ?? '',
+      requesterUid: (data['requesterUid'] as String?)?.trim() ?? '',
+      requesterName: (data['requesterName'] as String?)?.trim() ?? 'ผู้ใช้',
+      requesterEmail: (data['requesterEmail'] as String?)?.trim(),
+      topicKey: (data['topicKey'] as String?)?.trim() ?? '',
+      topicLabel: (data['topicLabel'] as String?)?.trim() ?? '',
+      message: (data['message'] as String?)?.trim() ?? '',
+      imageUrls: ((data['imageUrls'] as List?) ?? const <dynamic>[])
+          .whereType<String>()
+          .where((url) => url.trim().isNotEmpty)
+          .toList(growable: false),
+      status: (data['status'] as String?)?.trim() ?? 'open',
+      createdAt: data['createdAt'] is Timestamp
+          ? (data['createdAt'] as Timestamp).toDate()
+          : null,
+      updatedAt: data['updatedAt'] is Timestamp
+          ? (data['updatedAt'] as Timestamp).toDate()
+          : null,
+      unreadForAdmin: data['unreadForAdmin'] == true,
+      requesterPhone: (data['requesterPhone'] as String?)?.trim(),
+      lastMessagePreview: (data['lastMessagePreview'] as String?)?.trim(),
+      contactClosed: data['contactClosed'] == true || data['status'] == 'closed',
+    );
+  }
+
+  final String id;
+  final String sourceApp;
+  final String sourceLabel;
+  final String requesterUid;
+  final String requesterName;
+  final String? requesterEmail;
+  final String topicKey;
+  final String topicLabel;
+  final String message;
+  final List<String> imageUrls;
+  final String status;
+  final DateTime? createdAt;
+  final DateTime? updatedAt;
+  final bool unreadForAdmin;
+  final String? requesterPhone;
+  final String? lastMessagePreview;
+  final bool contactClosed;
+
+  bool get isOpen => status == 'open';
+  bool get isContactClosed => contactClosed || status == 'closed';
+}
+
+extension AdminRepositorySupport on AdminRepository {
+  static Stream<List<AdminSupportTicket>> streamSupportTickets({
+    String? sourceApp,
+  }) {
+    return FirebaseFirestore.instance
+        .collection('admin_support_tickets')
+        .orderBy('createdAt', descending: true)
+        .limit(200)
+        .snapshots()
+        .map((snapshot) {
+          final tickets = snapshot.docs
+              .map(AdminSupportTicket.fromDoc)
+              .toList(growable: false);
+          if (sourceApp == null || sourceApp.isEmpty) {
+            return tickets;
+          }
+          return tickets
+              .where((ticket) => ticket.sourceApp == sourceApp)
+              .toList(growable: false);
+        });
+  }
+
+  static Future<void> updateSupportTicketStatus({
+    required String ticketId,
+    required String status,
+  }) async {
+    await FirebaseFirestore.instance
+        .collection('admin_support_tickets')
+        .doc(ticketId)
+        .update(<String, dynamic>{
+      'status': status,
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
+  }
+
+  static Stream<List<AdminSupportMessage>> streamSupportMessages(
+    String ticketId,
+  ) {
+    return FirebaseFirestore.instance
+        .collection('admin_support_tickets')
+        .doc(ticketId)
+        .collection('messages')
+        .orderBy('createdAt', descending: false)
+        .limit(200)
+        .snapshots()
+        .map(
+          (snapshot) => snapshot.docs
+              .map(AdminSupportMessage.fromDoc)
+              .toList(growable: false),
+        );
+  }
+
+  static Future<void> markReadAsAdmin(String ticketId) async {
+    final ref = FirebaseFirestore.instance
+        .collection('admin_support_tickets')
+        .doc(ticketId);
+    final snap = await ref.get();
+    if (!snap.exists) {
+      return;
+    }
+    if (snap.data()?['unreadForAdmin'] != true) {
+      return;
+    }
+    await ref.update(<String, dynamic>{
+      'unreadForAdmin': false,
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
+  }
+
+  static Future<void> replyToSupportTicket({
+    required AdminSupportTicket ticket,
+    required String message,
+    List<String> imageUrls = const <String>[],
+    String? adminName,
+  }) async {
+    if (ticket.isContactClosed) {
+      throw StateError('เรื่องนี้ปิดแล้ว — ไม่สามารถตอบกลับได้');
+    }
+
+    final trimmed = message.trim();
+    if (trimmed.isEmpty) {
+      throw ArgumentError('กรุณาระบุข้อความตอบกลับ');
+    }
+
+    final user = FirebaseAuth.instance.currentUser;
+    final adminUid = user?.uid;
+    final senderName = adminName?.trim().isNotEmpty == true
+        ? adminName!.trim()
+        : (user?.email?.trim().isNotEmpty == true
+            ? user!.email!.trim()
+            : 'แอดมิน');
+
+    final preview = trimmed.length <= 120
+        ? trimmed
+        : '${trimmed.substring(0, 117)}...';
+
+    final ticketRef = FirebaseFirestore.instance
+        .collection('admin_support_tickets')
+        .doc(ticket.id);
+    final messageRef = ticketRef.collection('messages').doc();
+    final batch = FirebaseFirestore.instance.batch();
+
+    batch.set(messageRef, <String, dynamic>{
+      'senderRole': 'admin',
+      'senderUid': user?.uid ?? 'admin',
+      'senderName': senderName,
+      'message': trimmed,
+      'imageUrls': imageUrls,
+      'createdAt': FieldValue.serverTimestamp(),
+    });
+
+    final nextStatus = ticket.status == 'open' ? 'in_progress' : ticket.status;
+    batch.update(ticketRef, <String, dynamic>{
+      'status': nextStatus,
+      'lastMessagePreview': preview,
+      'lastMessageRole': 'admin',
+      'unreadForRequester': true,
+      'unreadForAdmin': false,
+      if (adminUid != null) 'assignedAdminUid': adminUid,
+      'updatedAt': FieldValue.serverTimestamp(),
+      'lastMessageAt': FieldValue.serverTimestamp(),
+    });
+
+    batch.set(
+      FirebaseFirestore.instance.collection('app_notifications').doc(),
+      <String, dynamic>{
+        'targetApp': ticket.sourceApp,
+        'recipientUid': ticket.requesterUid,
+        'ticketId': ticket.id,
+        'title': 'แอดมินตอบกลับ: ${ticket.topicLabel}',
+        'body': preview,
+        'action': 'admin_support_reply',
+        'sourceApp': 'van4_admin',
+        'read': false,
+        'isRead': false,
+        'createdAt': FieldValue.serverTimestamp(),
+      },
+    );
+
+    await batch.commit();
+  }
+
+  static Future<void> closeSupportTicket({
+    required AdminSupportTicket ticket,
+  }) async {
+    if (ticket.isContactClosed) {
+      return;
+    }
+
+    final user = FirebaseAuth.instance.currentUser;
+    final adminUid = user?.uid ?? 'admin';
+
+    final ticketRef = FirebaseFirestore.instance
+        .collection('admin_support_tickets')
+        .doc(ticket.id);
+    final messagesSnap = await ticketRef
+        .collection('messages')
+        .orderBy('createdAt', descending: false)
+        .get();
+    final messages = messagesSnap.docs
+        .map(AdminSupportMessage.fromDoc)
+        .toList(growable: false);
+
+    final transcript = <Map<String, dynamic>>[
+      <String, dynamic>{
+        'role': 'requester',
+        'message': ticket.message,
+        'imageUrls': ticket.imageUrls,
+        if (ticket.createdAt != null)
+          'createdAtMs': ticket.createdAt!.millisecondsSinceEpoch,
+      },
+      ...messages.map(
+        (item) => <String, dynamic>{
+          'role': item.senderRole,
+          'message': item.message,
+          'imageUrls': item.imageUrls,
+          if (item.createdAt != null)
+            'createdAtMs': item.createdAt!.millisecondsSinceEpoch,
+        },
+      ),
+    ];
+
+    final qaPairs = _buildSupportQaPairs(
+      initialQuestion: ticket.message,
+      initialQuestionImages: ticket.imageUrls,
+      messages: messages,
+    );
+
+    final batch = FirebaseFirestore.instance.batch();
+
+    batch.set(
+      FirebaseFirestore.instance
+          .collection('admin_support_knowledge')
+          .doc(ticket.id),
+      <String, dynamic>{
+        'ticketId': ticket.id,
+        'sourceApp': ticket.sourceApp,
+        'sourceLabel': ticket.sourceLabel,
+        'topicKey': ticket.topicKey,
+        'topicLabel': ticket.topicLabel,
+        'requesterUid': ticket.requesterUid,
+        'question': ticket.message,
+        'questionImageUrls': ticket.imageUrls,
+        'transcript': transcript,
+        'qaPairs': qaPairs,
+        'messageCount': transcript.length,
+        'status': 'closed',
+        'closedAt': FieldValue.serverTimestamp(),
+        'closedByAdminUid': adminUid,
+      },
+    );
+
+    batch.update(ticketRef, <String, dynamic>{
+      'status': 'closed',
+      'contactClosed': true,
+      'closedAt': FieldValue.serverTimestamp(),
+      'closedByAdminUid': adminUid,
+      'unreadForRequester': true,
+      'unreadForAdmin': false,
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
+
+    batch.set(
+      FirebaseFirestore.instance.collection('app_notifications').doc(),
+      <String, dynamic>{
+        'targetApp': ticket.sourceApp,
+        'recipientUid': ticket.requesterUid,
+        'ticketId': ticket.id,
+        'title': 'เรื่องถูกปิดแล้ว: ${ticket.topicLabel}',
+        'body': 'แอดมินปิดการสนทนาแล้ว — ดูประวัติได้ในแชทซัพพอร์ต',
+        'action': 'admin_support_closed',
+        'sourceApp': 'van4_admin',
+        'read': false,
+        'isRead': false,
+        'createdAt': FieldValue.serverTimestamp(),
+      },
+    );
+
+    await batch.commit();
+  }
+
+  static List<Map<String, dynamic>> _buildSupportQaPairs({
+    required String initialQuestion,
+    required List<String> initialQuestionImages,
+    required List<AdminSupportMessage> messages,
+  }) {
+    final pairs = <Map<String, dynamic>>[];
+    String? pendingQuestion = initialQuestion.trim();
+    var pendingQuestionImages = List<String>.from(initialQuestionImages);
+
+    for (final item in messages) {
+      if (!item.isAdmin) {
+        pendingQuestion = pendingQuestion == null || pendingQuestion.isEmpty
+            ? item.message.trim()
+            : '${pendingQuestion.trim()}\n${item.message.trim()}';
+        pendingQuestionImages = item.imageUrls;
+        continue;
+      }
+
+      final question = pendingQuestion?.trim();
+      if (question == null || question.isEmpty) {
+        continue;
+      }
+      pairs.add(<String, dynamic>{
+        'question': question,
+        'answer': item.message.trim(),
+        'questionImageUrls': pendingQuestionImages,
+        'answerImageUrls': item.imageUrls,
+      });
+      pendingQuestion = null;
+      pendingQuestionImages = const <String>[];
+    }
+
+    final trailingQuestion = pendingQuestion?.trim();
+    if (trailingQuestion != null &&
+        trailingQuestion.isNotEmpty &&
+        pairs.isEmpty) {
+      pairs.add(<String, dynamic>{
+        'question': trailingQuestion,
+        'answer': '',
+        'questionImageUrls': pendingQuestionImages,
+        'answerImageUrls': const <String>[],
+      });
+    }
+
+    return pairs;
+  }
+
+  static Future<List<String>> uploadSupportReplyImages({
+    required String requesterUid,
+    required String ticketId,
+    required List<String> localPaths,
+  }) async {
+    if (localPaths.isEmpty) {
+      return <String>[];
+    }
+
+    final storage = FirebaseStorage.instance;
+    final urls = <String>[];
+    for (final path in localPaths.take(4)) {
+      final file = File(path);
+      if (!file.existsSync()) {
+        continue;
+      }
+      final storagePath =
+          'admin_support_uploads/$requesterUid/$ticketId/${DateTime.now().millisecondsSinceEpoch}_${file.uri.pathSegments.last}';
+      final ref = storage.ref().child(storagePath);
+      await ref.putFile(file);
+      urls.add(await ref.getDownloadURL());
+    }
+    return urls;
+  }
+}
+
+class AdminSupportMessage {
+  const AdminSupportMessage({
+    required this.id,
+    required this.senderRole,
+    required this.senderUid,
+    required this.senderName,
+    required this.message,
+    required this.imageUrls,
+    this.createdAt,
+  });
+
+  factory AdminSupportMessage.fromDoc(
+    DocumentSnapshot<Map<String, dynamic>> doc,
+  ) {
+    final data = doc.data() ?? <String, dynamic>{};
+    return AdminSupportMessage(
+      id: doc.id,
+      senderRole: (data['senderRole'] as String?)?.trim() ?? 'requester',
+      senderUid: (data['senderUid'] as String?)?.trim() ?? '',
+      senderName: (data['senderName'] as String?)?.trim() ?? 'ผู้ใช้',
+      message: (data['message'] as String?)?.trim() ?? '',
+      imageUrls: ((data['imageUrls'] as List?) ?? const <dynamic>[])
+          .whereType<String>()
+          .where((url) => url.trim().isNotEmpty)
+          .toList(growable: false),
+      createdAt: data['createdAt'] is Timestamp
+          ? (data['createdAt'] as Timestamp).toDate()
+          : null,
+    );
+  }
+
+  final String id;
+  final String senderRole;
+  final String senderUid;
+  final String senderName;
+  final String message;
+  final List<String> imageUrls;
+  final DateTime? createdAt;
+
+  bool get isAdmin => senderRole == 'admin';
 }

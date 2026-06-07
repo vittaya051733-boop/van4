@@ -2,10 +2,13 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
 import 'admin_home_shelves_screen.dart';
+import 'admin_pricing_config_screen.dart';
+import 'admin_promotions_screen.dart';
 import 'admin_image_widgets.dart';
 import 'admin_order_support.dart';
 import 'admin_repository.dart';
 import 'admin_shop_screens.dart';
+import 'admin_support_screens.dart';
 
 class AdminHomeScreen extends StatelessWidget {
   const AdminHomeScreen({super.key, required this.user});
@@ -98,6 +101,28 @@ class AdminHomeScreen extends StatelessWidget {
           ),
           const SizedBox(height: 12),
           _AdminPrimaryButton(
+            icon: Icons.price_change_outlined,
+            title: 'ตั้งค่าราคาและค่าส่ง',
+            subtitle: 'อัตราบวกเพิ่มสินค้า ค่าส่งท้องถิ่น โดยสาร ส่งทั่วประเทศ — van2 ฟังค่านี้',
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(
+                builder: (_) => const AdminPricingConfigScreen(),
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          _AdminPrimaryButton(
+            icon: Icons.local_offer_outlined,
+            title: 'โปรโมชั่นและคูปอง',
+            subtitle: 'สร้างโปร/คูปอง + เลือกรูปแบบ UI บน van2',
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(
+                builder: (_) => const AdminPromotionsScreen(),
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          _AdminPrimaryButton(
             icon: Icons.storefront_outlined,
             title: 'จัดการร้านค้า',
             subtitle: 'อนุมัติร้าน • สินค้ารอตรวจ (AI) • ช่วยอัปโหลด • ตั้งค่ารูป/วิดีโอ',
@@ -112,6 +137,17 @@ class AdminHomeScreen extends StatelessWidget {
             subtitle: 'เปิด/ระงับความพร้อมรับงาน van3',
             onTap: () => Navigator.of(context).push(
               MaterialPageRoute<void>(builder: (_) => const RiderManagementScreen()),
+            ),
+          ),
+          const SizedBox(height: 12),
+          _AdminPrimaryButton(
+            icon: Icons.support_agent_outlined,
+            title: 'ข้อความติดต่อแอดมิน',
+            subtitle: 'จากลูกค้า / ร้านค้า / ไรเดอร์ — แยกฝั่งและหัวข้ออัตโนมัติ',
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(
+                builder: (_) => const AdminSupportInboxScreen(),
+              ),
             ),
           ),
           const SizedBox(height: 12),

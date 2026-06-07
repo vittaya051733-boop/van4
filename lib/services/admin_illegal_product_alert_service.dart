@@ -15,7 +15,7 @@ class AdminIllegalProductAlertService {
       AdminIllegalProductAlertService._();
 
   static const String _channelId = 'van4_illegal_product_alerts';
-  static const String _channelName = 'สินค้าผิดกฎหมาย (AI)';
+  static const String _channelName = 'สินค้ารอตรวจสอบ (AI)';
 
   final FlutterLocalNotificationsPlugin _localNotifications =
       FlutterLocalNotificationsPlugin();
@@ -71,7 +71,7 @@ class AdminIllegalProductAlertService {
     const channel = AndroidNotificationChannel(
       _channelId,
       _channelName,
-      description: 'แจ้งเตือนเมื่อ AI พบสินค้าที่อาจผิดกฎหมาย',
+      description: 'แจ้งเตือนเมื่อ AI ส่งสินค้าให้แอดมินตรวจสอบก่อนขึ้นขาย',
       importance: Importance.max,
       playSound: true,
       enableVibration: true,
@@ -85,7 +85,7 @@ class AdminIllegalProductAlertService {
     _baselineReady = false;
     _knownProductIds.clear();
 
-    _subscription = AdminRepository.streamIllegalAiProducts().listen(
+    _subscription = AdminRepository.streamPendingAiProductReviews().listen(
       _handleProducts,
       onError: (Object error, StackTrace stack) {
         debugPrint('Illegal product alert stream error: $error\n$stack');
@@ -126,10 +126,7 @@ class AdminIllegalProductAlertService {
 
   Future<void> _notifyNewIllegalProduct(AdminProductRecord product) async {
     final shopLabel = product.shopName ?? product.ownerUid ?? 'ไม่ระบุร้าน';
-    final reason = (product.aiLegalAnalysisReason ?? '').trim();
-    final body = reason.isNotEmpty
-        ? '$shopLabel — $reason'
-        : '$shopLabel — AI ประเมินว่าสินค้านี้อาจผิดกฎหมาย';
+    final body = '$shopLabel — ${product.aiReviewSummary}';
 
     await SystemSound.play(SystemSoundType.alert);
 
@@ -141,7 +138,7 @@ class AdminIllegalProductAlertService {
       priority: Priority.high,
       playSound: true,
       enableVibration: true,
-      ticker: 'สินค้าผิดกฎหมาย',
+      ticker: 'สินค้ารอตรวจสอบ',
     );
     const iosDetails = DarwinNotificationDetails(
       presentAlert: true,
@@ -155,7 +152,7 @@ class AdminIllegalProductAlertService {
 
     await _localNotifications.show(
       _notificationIdForProduct(product.id),
-      'พบสินค้ารอแอดมินตรวจสอบ (AI ประเมินว่าผิดกฎหมาย)',
+      'พบสินค้ารอแอดมินตรวจสอบ (AI)',
       '${product.name}\n$body',
       details,
     );

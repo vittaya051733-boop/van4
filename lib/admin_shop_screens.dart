@@ -220,11 +220,7 @@ class _IllegalAiProductsPanelState extends State<_IllegalAiProductsPanel> {
                 'เหตุผลจาก AI',
                 style: TextStyle(fontWeight: FontWeight.w700),
               ),
-              Text(
-                (product.aiLegalAnalysisReason ?? '').trim().isNotEmpty
-                    ? product.aiLegalAnalysisReason!.trim()
-                    : 'ไม่มีรายละเอียดเพิ่มเติม',
-              ),
+              Text(product.aiReviewSummary),
             ],
           ),
         ),
@@ -241,7 +237,7 @@ class _IllegalAiProductsPanelState extends State<_IllegalAiProductsPanel> {
   @override
   Widget build(BuildContext context) {
     return StreamBuilder<List<AdminProductRecord>>(
-      stream: AdminRepository.streamIllegalAiProducts(),
+      stream: AdminRepository.streamPendingAiProductReviews(),
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting && !snapshot.hasData) {
           return const SizedBox.shrink();
@@ -250,7 +246,7 @@ class _IllegalAiProductsPanelState extends State<_IllegalAiProductsPanel> {
           return Padding(
             padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
             child: Text(
-              'โหลดรายการสินค้าผิดกฎหมายไม่สำเร็จ: ${snapshot.error}',
+              'โหลดรายการสินค้ารอตรวจสอบไม่สำเร็จ: ${snapshot.error}',
               style: const TextStyle(color: Color(0xFFB45309)),
             ),
           );
@@ -265,23 +261,23 @@ class _IllegalAiProductsPanelState extends State<_IllegalAiProductsPanel> {
           margin: const EdgeInsets.fromLTRB(16, 16, 16, 0),
           padding: const EdgeInsets.all(14),
           decoration: BoxDecoration(
-            color: const Color(0xFFFFF1F2),
+            color: const Color(0xFFFFF7ED),
             borderRadius: BorderRadius.circular(18),
-            border: Border.all(color: const Color(0xFFFECACA)),
+            border: Border.all(color: const Color(0xFFFDBA74)),
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: <Widget>[
               Row(
                 children: <Widget>[
-                  const Icon(Icons.gavel_outlined, color: Color(0xFFB91C1C)),
+                  const Icon(Icons.fact_check_outlined, color: Color(0xFFB45309)),
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(
-                      'รอแอดมินอนุมัติ — AI ประเมินว่าผิดกฎหมาย (${products.length})',
+                      'รอแอดมินอนุมัติ — AI ต้องตรวจสอบก่อนขึ้นขาย (${products.length})',
                       style: Theme.of(context).textTheme.titleSmall?.copyWith(
                             fontWeight: FontWeight.w800,
-                            color: const Color(0xFF991B1B),
+                            color: const Color(0xFFB45309),
                           ),
                     ),
                   ),
@@ -336,18 +332,17 @@ class _IllegalAiProductsPanelState extends State<_IllegalAiProductsPanel> {
                                       fontSize: 13,
                                     ),
                                   ),
-                                  if ((product.aiLegalAnalysisReason ?? '')
-                                      .trim()
-                                      .isNotEmpty)
-                                    Text(
-                                      product.aiLegalAnalysisReason!.trim(),
-                                      maxLines: 2,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: const TextStyle(
-                                        color: Color(0xFFB45309),
-                                        fontSize: 12,
-                                      ),
+                                  Text(
+                                    product.aiReviewSummary,
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(
+                                      color: product.isAiIllegalInThailand
+                                          ? const Color(0xFFB91C1C)
+                                          : const Color(0xFFB45309),
+                                      fontSize: 12,
                                     ),
+                                  ),
                                 ],
                               ),
                             ),
