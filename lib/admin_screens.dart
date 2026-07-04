@@ -1105,7 +1105,6 @@ class _AdminInfoCard extends StatelessWidget {
     required this.title,
     required this.subtitle,
     required this.detailLines,
-    this.imageUrl,
     this.actions,
     this.statusChip,
   });
@@ -1113,7 +1112,6 @@ class _AdminInfoCard extends StatelessWidget {
   final String title;
   final String subtitle;
   final List<String> detailLines;
-  final String? imageUrl;
   final List<Widget>? actions;
   final Widget? statusChip;
 
@@ -1134,7 +1132,7 @@ class _AdminInfoCard extends StatelessWidget {
           Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: <Widget>[
-              AdminSafeAvatar(imageUrl: imageUrl),
+              const AdminSafeAvatar(),
               const SizedBox(width: 14),
               Expanded(
                 child: Column(

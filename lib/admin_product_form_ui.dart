@@ -90,7 +90,7 @@ extension _AdminMerchantProductFormUi on _AdminAddProductScreenState {
                           ),
                           focusNode: _priceFocusNode,
                           onTap: () {
-                            setState(() {
+                            _updateFormState(() {
                               _showPreparationTimeGuidance = false;
                               _priceGuidanceDismissedWhileFocused = false;
                               _showPriceGuidance = true;
@@ -98,7 +98,7 @@ extension _AdminMerchantProductFormUi on _AdminAddProductScreenState {
                           },
                           onChanged: (_) {
                             if (_showPriceGuidance && mounted) {
-                              setState(() {});
+                              _updateFormState(() {});
                             }
                           },
                         ),
@@ -113,7 +113,7 @@ extension _AdminMerchantProductFormUi on _AdminAddProductScreenState {
                           controller: _preparationTimeController,
                           keyboardType: TextInputType.number,
                           hint: 'เช่น 10',
-                          onTap: () => setState(() {
+                          onTap: () => _updateFormState(() {
                             _showPriceGuidance = false;
                             _priceGuidanceDismissedWhileFocused = false;
                             _showPreparationTimeGuidance = true;
@@ -403,7 +403,7 @@ extension _AdminMerchantProductFormUi on _AdminAddProductScreenState {
                           if (value == null) {
                             return;
                           }
-                          setState(() => _weightUnit = value);
+                          _updateFormState(() => _weightUnit = value);
                         },
                   items: const <DropdownMenuItem<String>>[
                     DropdownMenuItem<String>(value: 'g', child: Text('g')),
@@ -772,7 +772,7 @@ extension _AdminMerchantProductFormUi on _AdminAddProductScreenState {
       onChanged: _saving
           ? null
           : (value) {
-              setState(() => _manualCanShipNationwide = value ?? false);
+              _updateFormState(() => _manualCanShipNationwide = value ?? false);
             },
       activeColor: AppColors.accent,
     );
@@ -958,7 +958,7 @@ extension _AdminMerchantProductFormUi on _AdminAddProductScreenState {
               onChanged: _saving
                   ? null
                   : (value) {
-                      setState(() {
+                      _updateFormState(() {
                         _selectedProductCategory = value;
                         if (_isPharmacyCategory) {
                           _isFreshProduct = false;
@@ -1001,7 +1001,7 @@ extension _AdminMerchantProductFormUi on _AdminAddProductScreenState {
                 onChanged: _saving
                     ? null
                     : (value) {
-                        setState(() {
+                        _updateFormState(() {
                           _pharmacyIsTaxable = value;
                           _isFreshProduct = false;
                           _isProcessed = false;
@@ -1019,7 +1019,7 @@ extension _AdminMerchantProductFormUi on _AdminAddProductScreenState {
                 onChanged: _saving
                     ? null
                     : (value) {
-                        setState(() => _isFreshProduct = value);
+                        _updateFormState(() => _isFreshProduct = value);
                       },
                 activeColor: AppColors.accent,
               ),
@@ -1033,7 +1033,7 @@ extension _AdminMerchantProductFormUi on _AdminAddProductScreenState {
                 onChanged: _saving
                     ? null
                     : (value) {
-                        setState(() => _isProcessed = value);
+                        _updateFormState(() => _isProcessed = value);
                       },
                 activeColor: AppColors.accent,
               ),
@@ -1124,7 +1124,7 @@ extension _AdminMerchantProductFormUi on _AdminAddProductScreenState {
               controller: _toppingsController,
               focusNode: _toppingsFocusNode,
               hint: 'เช่น (ระดับความเผ็ด) +เผ็ดน้อย+ เผ็ด+ กลาง+เผ็ดมาก',
-              onTap: () => setState(() {
+              onTap: () => _updateFormState(() {
                 _showPriceGuidance = false;
                 _showPreparationTimeGuidance = false;
                 _showToppingsGuidance = true;
@@ -1201,7 +1201,7 @@ extension _AdminMerchantProductFormUi on _AdminAddProductScreenState {
               onChanged: _saving
                   ? null
                   : (value) {
-                      setState(() => _selectedUnit = value);
+                      _updateFormState(() => _selectedUnit = value);
                     },
               decoration: InputDecoration(
                 border: OutlineInputBorder(

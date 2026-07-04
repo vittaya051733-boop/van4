@@ -885,6 +885,12 @@ class _AdminAddProductScreenState extends State<AdminAddProductScreen> {
     }
   }
 
+  void _updateFormState(VoidCallback fn) {
+    if (mounted) {
+      setState(fn);
+    }
+  }
+
   void _showSnack(String message) {
     if (!mounted) {
       return;
