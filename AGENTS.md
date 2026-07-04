@@ -7,6 +7,10 @@
 3. Run `..\van2\scripts\deploy-readiness.ps1 -App van4 -Target <target>`
 4. Deploy ONE target: `..\van2\scripts\deploy-self.ps1 -App van4 -Target <target> ...`
 
+## Before removing production code
+
+See `DEPLOY_GOVERNANCE.md` § **Checkpoint ก่อนลบโค้ด**: report impact and wait for user confirmation before delete + deploy.
+
 ## Allowed targets
 
 `storage`, `hosting`, `firestore-van4` (isolated DB)

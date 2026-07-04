@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_storage/firebase_storage.dart';
+import 'package:flutter/foundation.dart';
 
 class AdminAccessCheck {
   const AdminAccessCheck({
@@ -305,6 +306,83 @@ class AdminRepository {
     }, SetOptions(merge: true));
   }
 
+  static Future<void> setRiderRegistrationStatus({
+    required String riderId,
+    required String status,
+    required String adminUid,
+    String? reviewNote,
+  }) async {
+    final payload = <String, dynamic>{
+      'registrationStatus': status,
+      'adminReviewedAt': FieldValue.serverTimestamp(),
+      'adminReviewedBy': adminUid,
+      'updatedAt': FieldValue.serverTimestamp(),
+      if (reviewNote != null && reviewNote.trim().isNotEmpty)
+        'reviewNote': reviewNote.trim(),
+    };
+
+    if (status == 'approved') {
+      payload['onlineReady'] = true;
+      payload['adminSuspended'] = false;
+    } else if (status == 'rejected') {
+      payload['onlineReady'] = false;
+      payload['adminSuspended'] = true;
+    }
+
+    final batch = _firestore.batch();
+    batch.set(
+      _firestore.collection('riders').doc(riderId),
+      payload,
+      SetOptions(merge: true),
+    );
+    batch.set(
+      _firestore.collection('rider_registrations').doc(riderId),
+      payload,
+      SetOptions(merge: true),
+    );
+    await batch.commit();
+
+    final isApproved = status == 'approved';
+    await _notifyApp(
+      targetApp: 'van3',
+      recipientUid: riderId,
+      title: isApproved ? 'อนุมัติการสมัครไรเดอร์แล้ว' : 'คำขอสมัครไรเดอร์ไม่ผ่าน',
+      body: isApproved
+          ? 'คุณสามารถเปิดรับงานบนแอปไรเดอร์ได้แล้ว'
+          : (reviewNote?.trim().isNotEmpty == true
+              ? reviewNote!.trim()
+              : 'กรุณาติดต่อแอดมินเพื่อแก้ไขข้อมูล'),
+      action: isApproved ? 'rider_registration_approved' : 'rider_registration_rejected',
+    );
+  }
+
+  static Future<String?> resolveOrderDocumentId({
+    String? orderId,
+    String? orderCode,
+  }) async {
+    final trimmedOrderId = orderId?.trim();
+    if (trimmedOrderId != null && trimmedOrderId.isNotEmpty) {
+      final snapshot = await _firestore.collection('orders').doc(trimmedOrderId).get();
+      if (snapshot.exists) {
+        return snapshot.id;
+      }
+    }
+
+    final trimmedOrderCode = orderCode?.trim();
+    if (trimmedOrderCode != null && trimmedOrderCode.isNotEmpty) {
+      final snapshot = await _firestore
+          .collection('orders')
+          .where('orderCode', isEqualTo: trimmedOrderCode)
+          .limit(1)
+          .get();
+      if (snapshot.docs.isNotEmpty) {
+        return snapshot.docs.first.id;
+      }
+    }
+
+    return null;
+  }
+
   static Future<void> adminCancelOrder({
     required String orderId,
     required String reason,
@@ -437,7 +515,7 @@ class AdminRepository {
       }
       return raw
           .map((entry) => entry.toString().trim())
-          .where((entry) => entry.isNotEmpty)
+          .where((String entry) => entry.isNotEmpty)
           .toList(growable: false);
     });
   }
@@ -584,10 +662,84 @@ class AdminRepository {
     }, SetOptions(merge: true));
   }
 
+  static Future<AdminPendingReviewDraft> fetchPendingProductReviewDraft(
+    String reviewId,
+  ) async {
+    final reviewSnap =
+        await _firestore.collection('product_admin_reviews').doc(reviewId).get();
+    if (!reviewSnap.exists) {
+      throw Exception('ไม่พบคำขอตรวจสอบสินค้า');
+    }
+    final raw = Map<String, dynamic>.from(reviewSnap.data() ?? <String, dynamic>{});
+    if (raw['adminReviewStatus']?.toString() != 'pending') {
+      throw Exception('คำขอนี้ถูกดำเนินการแล้ว แก้ไขไม่ได้');
+    }
+    if (raw['aiRequiresAdminReview'] != true || raw['aiIsLegalInThailand'] == false) {
+      throw Exception('แก้ไขได้เฉพาะสินค้าที่ AI ประเมินความมั่นใจต่ำกว่า 80%');
+    }
+    return AdminPendingReviewDraft.fromReviewData(reviewId, raw);
+  }
+
+  static Future<void> updatePendingProductReview({
+    required String reviewId,
+    required String adminUid,
+    required String name,
+    required String description,
+    required double price,
+    required int stock,
+    required List<String> imageUrls,
+    AdminProductCreateInput? details,
+  }) async {
+    final reviewRef = _firestore.collection('product_admin_reviews').doc(reviewId);
+    final reviewSnap = await reviewRef.get();
+    if (!reviewSnap.exists) {
+      throw Exception('ไม่พบคำขอตรวจสอบสินค้า');
+    }
+    if (reviewSnap.data()?['adminReviewStatus']?.toString() != 'pending') {
+      throw Exception('คำขอนี้ถูกดำเนินการแล้ว');
+    }
+
+    final preparationMinutes = details?.preparationTimeMinutes ?? 10;
+    final thumbnailUrls = details?.thumbnailUrls ?? imageUrls;
+    final toppings = details?.toppings?.trim();
+
+    final updateData = <String, dynamic>{
+      'name': name.trim(),
+      'description': description.trim(),
+      'price': price,
+      'stock': stock,
+      'preparationTimeMinutes': preparationMinutes,
+      'preparingDuration': preparationMinutes * 60 * 1000,
+      'imageUrls': imageUrls,
+      'thumbnailUrls': thumbnailUrls,
+      'updatedAt': FieldValue.serverTimestamp(),
+      'adminEditedAt': FieldValue.serverTimestamp(),
+      'adminEditedBy': adminUid,
+      if (details != null) ...details.productFields,
+      if (details?.specificationsPayload != null)
+        'specificationsPayload': details!.specificationsPayload,
+    };
+
+    if (toppings != null && toppings.isNotEmpty) {
+      updateData['toppings'] = toppings;
+    } else {
+      updateData['toppings'] = FieldValue.delete();
+    }
+
+    await reviewRef.set(updateData, SetOptions(merge: true));
+  }
+
   static List<AdminProductRecord> _sortProducts(
     Iterable<QueryDocumentSnapshot<Map<String, dynamic>>> docs,
   ) {
-    final products = docs.map(AdminProductRecord.fromSnapshot).toList(growable: true);
+    final products = <AdminProductRecord>[];
+    for (final doc in docs) {
+      try {
+        products.add(AdminProductRecord.fromSnapshot(doc));
+      } catch (error, stack) {
+        debugPrint('Skip invalid product doc ${doc.id}: $error\n$stack');
+      }
+    }
     products.sort(
       (left, right) =>
           (right.updatedAt ?? DateTime.fromMillisecondsSinceEpoch(0))
@@ -604,6 +756,7 @@ class AdminRepository {
     required int stock,
     required List<String> imageUrls,
     required String adminUid,
+    AdminProductCreateInput? details,
   }) async {
     final ownerId = shop.ownerId;
     final publicShop = await _firestore.collection('public_shops').doc(ownerId).get();
@@ -611,30 +764,74 @@ class AdminRepository {
     final shopName =
         shop.displayName.isNotEmpty ? shop.displayName : publicData['shopName']?.toString();
     final shopImageUrl = shop.imageUrl ?? publicData['shopImageUrl']?.toString();
+    final thumbnailUrls = details?.thumbnailUrls ?? imageUrls;
+    final preparationMinutes = details?.preparationTimeMinutes ?? 10;
+    final location = _extractShopLocation(publicData);
+    final latitude = location['latitude'];
+    final longitude = location['longitude'];
 
     final productData = <String, dynamic>{
       'name': name.trim(),
       'description': description.trim(),
       'price': price,
       'stock': stock,
-      'preparationTimeMinutes': 10,
-      'preparingDuration': 10 * 60 * 1000,
+      'preparationTimeMinutes': preparationMinutes,
+      'preparingDuration': preparationMinutes * 60 * 1000,
       'imageUrls': imageUrls,
-      'thumbnailUrls': imageUrls,
+      'thumbnailUrls': thumbnailUrls,
       'ownerUid': ownerId,
       'shopName': shopName,
       if (shopImageUrl != null && shopImageUrl.trim().isNotEmpty) 'shopImageUrl': shopImageUrl,
+      'shopQrCode': ownerId,
+      if (latitude != null && longitude != null)
+        'location': <String, double>{
+          'latitude': latitude,
+          'longitude': longitude,
+        },
       'serviceType': shop.serviceType,
-      'isActive': true,
-      'activeAt': FieldValue.serverTimestamp(),
-      'createdAt': FieldValue.serverTimestamp(),
       'updatedAt': FieldValue.serverTimestamp(),
       'uploadedByAdmin': true,
       'adminUploadedBy': adminUid,
       'adminUploadedAt': FieldValue.serverTimestamp(),
+      if (details != null) ...details.productFields,
     };
 
-    await _firestore.collection('products').add(productData);
+    final requiresReview =
+        details?.aiConfidenceFields['aiRequiresAdminReview'] == true;
+
+    if (requiresReview) {
+      final reviewData = Map<String, dynamic>.from(productData)
+        ..['adminReviewStatus'] = 'pending'
+        ..['submittedAt'] = FieldValue.serverTimestamp()
+        ..['submittedByUid'] = adminUid
+        ..['reviewType'] = 'create';
+      if (details?.specificationsPayload != null) {
+        reviewData['specificationsPayload'] = details!.specificationsPayload;
+      }
+
+      await _firestore.collection('product_admin_reviews').add(reviewData);
+      return;
+    }
+
+    productData['isActive'] = true;
+    productData['activeAt'] = FieldValue.serverTimestamp();
+    productData['createdAt'] = FieldValue.serverTimestamp();
+
+    final productRef = await _firestore.collection('products').add(productData);
+
+    if (details?.specificationsPayload != null) {
+      final specs = Map<String, dynamic>.from(details!.specificationsPayload!);
+      specs.remove('createdAt');
+      specs.remove('updatedAt');
+      specs['productId'] = productRef.id;
+      specs['ownerUid'] = ownerId;
+      specs['createdAt'] = FieldValue.serverTimestamp();
+      specs['updatedAt'] = FieldValue.serverTimestamp();
+      await productRef
+          .collection('specifications')
+          .doc('main')
+          .set(specs, SetOptions(merge: true));
+    }
 
     await _notifyApp(
       targetApp: 'van1',
@@ -643,6 +840,47 @@ class AdminRepository {
       body: 'สินค้า "$name" ถูกเพิ่มในร้าน ${shop.displayName}',
       action: 'admin_product_created',
     );
+  }
+
+  static Map<String, double?> _extractShopLocation(Map<String, dynamic> data) {
+    final locationRaw = data['location'];
+    if (locationRaw is Map) {
+      final lat = _toDouble(locationRaw['latitude'] ?? locationRaw['lat']);
+      final lng = _toDouble(locationRaw['longitude'] ?? locationRaw['lng']);
+      if (lat != null && lng != null) {
+        return <String, double?>{'latitude': lat, 'longitude': lng};
+      }
+    }
+    final lat = _toDouble(data['latitude'] ?? data['shopLatitude'] ?? data['lat']);
+    final lng = _toDouble(data['longitude'] ?? data['shopLongitude'] ?? data['lng']);
+    return <String, double?>{'latitude': lat, 'longitude': lng};
+  }
+
+  static Future<List<String>> uploadProductImages({
+    required String ownerUid,
+    required List<String> localPaths,
+  }) async {
+    if (localPaths.isEmpty) {
+      return <String>[];
+    }
+
+    final storage = FirebaseStorage.instance;
+    final urls = <String>[];
+    for (final path in localPaths) {
+      final file = File(path);
+      if (!file.existsSync()) {
+        continue;
+      }
+      final fileName = file.uri.pathSegments.isNotEmpty
+          ? file.uri.pathSegments.last
+          : 'image.jpg';
+      final storagePath =
+          'product_images/$ownerUid/admin_${DateTime.now().millisecondsSinceEpoch}_$fileName';
+      final ref = storage.ref().child(storagePath);
+      await ref.putFile(file);
+      urls.add(await ref.getDownloadURL());
+    }
+    return urls;
   }
 
   static Future<void> _notifyApp({
@@ -668,6 +906,261 @@ class AdminRepository {
       if (orderId != null) 'orderId': orderId,
       'createdAt': FieldValue.serverTimestamp(),
     });
+  }
+}
+
+class AdminPendingReviewDraft {
+  const AdminPendingReviewDraft({
+    required this.reviewId,
+    required this.ownerUid,
+    required this.shopName,
+    required this.serviceType,
+    required this.name,
+    required this.description,
+    required this.toppings,
+    required this.price,
+    required this.stock,
+    required this.preparationTimeMinutes,
+    required this.imageUrls,
+    required this.productCategory,
+    required this.isFreshProduct,
+    required this.isProcessed,
+    required this.unit,
+    required this.weight,
+    required this.weightAmount,
+    required this.weightUnit,
+    required this.parcelLengthCm,
+    required this.parcelWidthCm,
+    required this.parcelHeightCm,
+    required this.pharmacyIsTaxable,
+    required this.aiSourceData,
+  });
+
+  final String reviewId;
+  final String ownerUid;
+  final String shopName;
+  final String serviceType;
+  final String name;
+  final String description;
+  final String toppings;
+  final double price;
+  final int stock;
+  final int preparationTimeMinutes;
+  final List<String> imageUrls;
+  final String? productCategory;
+  final bool isFreshProduct;
+  final bool isProcessed;
+  final String? unit;
+  final String? weight;
+  final String? weightAmount;
+  final String? weightUnit;
+  final double? parcelLengthCm;
+  final double? parcelWidthCm;
+  final double? parcelHeightCm;
+  final bool pharmacyIsTaxable;
+  final Map<String, dynamic> aiSourceData;
+
+  factory AdminPendingReviewDraft.fromReviewData(
+    String reviewId,
+    Map<String, dynamic> raw,
+  ) {
+    final specsRaw = raw['specificationsPayload'];
+    final specs = specsRaw is Map
+        ? Map<String, dynamic>.from(specsRaw.cast<String, dynamic>())
+        : <String, dynamic>{};
+
+    String? pick(List<String> keys) {
+      for (final key in keys) {
+        final value = raw[key] ?? specs[key];
+        if (value == null) {
+          continue;
+        }
+        final text = value.toString().trim();
+        if (text.isNotEmpty) {
+          return text;
+        }
+      }
+      return null;
+    }
+
+    bool pickBool(String key, {bool fallback = false}) {
+      final value = raw[key] ?? specs[key];
+      return value is bool ? value : fallback;
+    }
+
+    double? pickDouble(String key) {
+      final value = raw[key] ?? specs[key];
+      if (value is num) {
+        return value.toDouble();
+      }
+      return double.tryParse(value?.toString() ?? '');
+    }
+
+    final rawImages = raw['imageUrls'];
+    final imageUrls = rawImages is List
+        ? rawImages
+            .map((item) => item.toString())
+            .where((url) => url.trim().isNotEmpty)
+            .toList(growable: false)
+        : <String>[];
+
+    final weightText = pick(const <String>['weight']);
+    String? weightAmount;
+    String? weightUnit;
+    if (weightText != null) {
+      final parts = weightText.split(RegExp(r'\s+'));
+      if (parts.length >= 2) {
+        weightAmount = parts[0];
+        final unit = parts[1].toLowerCase();
+        if (unit == 'g' || unit == 'kg') {
+          weightUnit = unit;
+        }
+      } else {
+        weightAmount = weightText;
+      }
+    } else {
+      final grams = _toInt(raw['parcelWeightGrams'] ?? specs['parcelWeightGrams']);
+      if (grams != null && grams > 0) {
+        if (grams >= 1000 && grams % 1000 == 0) {
+          weightAmount = (grams ~/ 1000).toString();
+          weightUnit = 'kg';
+        } else {
+          weightAmount = grams.toString();
+          weightUnit = 'g';
+        }
+      }
+    }
+
+    final productCategory = pick(const <String>['productCategory']);
+    final taxStatus = pick(const <String>['taxStatus']);
+    final pharmacyIsTaxable = productCategory == 'ร้านขายยาและเวชภัณฑ์'
+        ? taxStatus != 'exempt'
+        : true;
+
+    final mergedAiData = <String, dynamic>{...specs, ...raw};
+
+    return AdminPendingReviewDraft(
+      reviewId: reviewId,
+      ownerUid: pick(const <String>['ownerUid']) ?? '',
+      shopName: pick(const <String>['shopName']) ?? 'ร้านค้า',
+      serviceType: pick(const <String>['serviceType']) ?? 'general',
+      name: pick(const <String>['name']) ?? '',
+      description: pick(const <String>['description']) ?? '',
+      toppings: pick(const <String>['toppings']) ?? '',
+      price: _toDouble(raw['price']) ?? 0,
+      stock: _toInt(raw['stock']) ?? 0,
+      preparationTimeMinutes: _toInt(raw['preparationTimeMinutes']) ??
+          _toInt(specs['preparationTimeMinutes']) ??
+          10,
+      imageUrls: imageUrls,
+      productCategory: productCategory,
+      isFreshProduct: pickBool('isFreshProduct'),
+      isProcessed: pickBool('isProcessed'),
+      unit: pick(const <String>['unit']),
+      weight: weightText,
+      weightAmount: weightAmount,
+      weightUnit: weightUnit,
+      parcelLengthCm: pickDouble('parcelLengthCm'),
+      parcelWidthCm: pickDouble('parcelWidthCm'),
+      parcelHeightCm: pickDouble('parcelHeightCm'),
+      pharmacyIsTaxable: pharmacyIsTaxable,
+      aiSourceData: mergedAiData,
+    );
+  }
+}
+
+class AdminProductCreateInput {
+  const AdminProductCreateInput({
+    this.thumbnailUrls,
+    this.preparationTimeMinutes = 10,
+    this.productCategory,
+    this.isFreshProduct = false,
+    this.isProcessed = false,
+    this.taxStatus,
+    this.taxStatusLabel,
+    this.taxReason,
+    this.unit,
+    this.weight,
+    this.parcelWeightGrams,
+    this.parcelLengthCm,
+    this.parcelWidthCm,
+    this.parcelHeightCm,
+    this.canShipNationwide = false,
+    this.nationwideShippingReason,
+    this.toppings,
+    this.colors,
+    this.sizes,
+    this.aiDescriptionRequested = false,
+    this.aiProductAnalysisRequested = false,
+    this.aiIsLegalInThailand,
+    this.aiLegalAnalysisReason,
+    this.aiProductType,
+    this.taxAiReason,
+    this.aiConfidenceFields = const <String, dynamic>{},
+    this.specificationsPayload,
+  });
+
+  final List<String>? thumbnailUrls;
+  final int preparationTimeMinutes;
+  final String? productCategory;
+  final bool isFreshProduct;
+  final bool isProcessed;
+  final String? taxStatus;
+  final String? taxStatusLabel;
+  final String? taxReason;
+  final String? unit;
+  final String? weight;
+  final int? parcelWeightGrams;
+  final double? parcelLengthCm;
+  final double? parcelWidthCm;
+  final double? parcelHeightCm;
+  final bool canShipNationwide;
+  final String? nationwideShippingReason;
+  final String? toppings;
+  final List<String>? colors;
+  final List<String>? sizes;
+  final bool aiDescriptionRequested;
+  final bool aiProductAnalysisRequested;
+  final bool? aiIsLegalInThailand;
+  final String? aiLegalAnalysisReason;
+  final String? aiProductType;
+  final String? taxAiReason;
+  final Map<String, dynamic> aiConfidenceFields;
+  final Map<String, dynamic>? specificationsPayload;
+
+  Map<String, dynamic> get productFields {
+    return <String, dynamic>{
+      if (productCategory != null && productCategory!.trim().isNotEmpty)
+        'productCategory': productCategory!.trim(),
+      'isFreshProduct': isFreshProduct,
+      'isProcessed': isProcessed,
+      if (taxStatus != null) 'taxStatus': taxStatus,
+      if (taxStatusLabel != null) 'taxStatusLabel': taxStatusLabel,
+      if (unit != null && unit!.trim().isNotEmpty) 'unit': unit!.trim(),
+      if (weight != null && weight!.trim().isNotEmpty) 'weight': weight!.trim(),
+      if (parcelWeightGrams != null && parcelWeightGrams! > 0)
+        'parcelWeightGrams': parcelWeightGrams,
+      if (parcelLengthCm != null) 'parcelLengthCm': parcelLengthCm,
+      if (parcelWidthCm != null) 'parcelWidthCm': parcelWidthCm,
+      if (parcelHeightCm != null) 'parcelHeightCm': parcelHeightCm,
+      'canShipNationwide': canShipNationwide,
+      if (nationwideShippingReason != null &&
+          nationwideShippingReason!.trim().isNotEmpty)
+        'nationwideShippingReason': nationwideShippingReason!.trim(),
+      if (toppings != null && toppings!.trim().isNotEmpty) 'toppings': toppings!.trim(),
+      if (colors != null && colors!.isNotEmpty) 'colors': colors,
+      if (sizes != null && sizes!.isNotEmpty) 'sizes': sizes,
+      'aiDescriptionRequested': aiDescriptionRequested,
+      'aiProductAnalysisRequested': aiProductAnalysisRequested,
+      if (aiIsLegalInThailand != null) 'aiIsLegalInThailand': aiIsLegalInThailand,
+      if (aiLegalAnalysisReason != null && aiLegalAnalysisReason!.trim().isNotEmpty)
+        'aiLegalAnalysisReason': aiLegalAnalysisReason!.trim(),
+      if (aiProductType != null && aiProductType!.trim().isNotEmpty)
+        'aiProductType': aiProductType!.trim(),
+      if (taxAiReason != null && taxAiReason!.trim().isNotEmpty)
+        'taxAiReason': taxAiReason!.trim(),
+      ...aiConfidenceFields,
+    };
   }
 }
 
@@ -728,10 +1221,12 @@ class AdminProductRecord {
     this.adminReviewStatus,
     this.reviewType,
     this.targetProductId,
+    this.description,
   });
 
   final String id;
   final String name;
+  final String? description;
   final double? price;
   final int? stock;
   final bool isActive;
@@ -775,12 +1270,16 @@ class AdminProductRecord {
     final data = doc.data();
     final rawImages = data['imageUrls'];
     final images = rawImages is List
-        ? rawImages.map((item) => item.toString()).where((url) => url.trim().isNotEmpty).toList()
+        ? rawImages
+            .map((item) => item.toString())
+            .where((String url) => url.trim().isNotEmpty)
+            .toList()
         : <String>[];
 
     return AdminProductRecord(
       id: doc.id,
       name: _firstString(data, const <String>['name']) ?? 'ไม่ระบุชื่อ',
+      description: _firstString(data, const <String>['description']),
       price: _toDouble(data['price']),
       stock: _toInt(data['stock']),
       isActive: data['isActive'] != false,
@@ -801,9 +1300,9 @@ class AdminProductRecord {
           ? data['aiRequiresAdminReview'] as bool
           : null,
       aiReviewReasonLabels: data['aiReviewReasonLabels'] is List
-          ? data['aiReviewReasonLabels']
+          ? (data['aiReviewReasonLabels'] as List)
               .map((item) => item.toString().trim())
-              .where((item) => item.isNotEmpty)
+              .where((String item) => item.isNotEmpty)
               .toList(growable: false)
           : null,
       adminReviewStatus: _firstString(data, const <String>['adminReviewStatus']),
@@ -882,6 +1381,10 @@ class AdminRiderRecord {
     required this.locationStatus,
     required this.updatedAt,
     required this.adminSuspended,
+    this.registrationStatus,
+    this.bankName,
+    this.accountNumber,
+    this.accountName,
   });
 
   final String id;
@@ -891,6 +1394,10 @@ class AdminRiderRecord {
   final String locationStatus;
   final DateTime? updatedAt;
   final bool adminSuspended;
+  final String? registrationStatus;
+  final String? bankName;
+  final String? accountNumber;
+  final String? accountName;
 
   factory AdminRiderRecord.fromSnapshot(QueryDocumentSnapshot<Map<String, dynamic>> doc) {
     final data = doc.data();
@@ -902,6 +1409,10 @@ class AdminRiderRecord {
       locationStatus: _firstString(data, const <String>['locationStatus', 'status']) ?? 'offline',
       updatedAt: _toDateTime(data['updatedAt']) ?? _toDateTime(data['locationUpdatedAt']),
       adminSuspended: (data['adminSuspended'] as bool?) ?? false,
+      registrationStatus: _firstString(data, const <String>['registrationStatus']),
+      bankName: _firstString(data, const <String>['bankName']),
+      accountNumber: _firstString(data, const <String>['accountNumber']),
+      accountName: _firstString(data, const <String>['accountName', 'accountOwner']),
     );
   }
 }
@@ -1188,6 +1699,23 @@ double? _toDouble(Object? value) {
   return null;
 }
 
+List<String> _readStringList(Object? value) {
+  if (value is! List) {
+    return const <String>[];
+  }
+  return value
+      .map((item) => item.toString().trim())
+      .where((url) => url.isNotEmpty)
+      .toList(growable: false);
+}
+
+String formatAdminBaht(double? price) {
+  if (price == null || !price.isFinite) {
+    return '-';
+  }
+  return price.toStringAsFixed(2);
+}
+
 class AdminSupportTicket {
   AdminSupportTicket({
     required this.id,
@@ -1200,6 +1728,7 @@ class AdminSupportTicket {
     required this.topicLabel,
     required this.message,
     required this.imageUrls,
+    required this.lastMessageImageUrls,
     required this.status,
     this.createdAt,
     this.updatedAt,
@@ -1223,10 +1752,8 @@ class AdminSupportTicket {
       topicKey: (data['topicKey'] as String?)?.trim() ?? '',
       topicLabel: (data['topicLabel'] as String?)?.trim() ?? '',
       message: (data['message'] as String?)?.trim() ?? '',
-      imageUrls: ((data['imageUrls'] as List?) ?? const <dynamic>[])
-          .whereType<String>()
-          .where((url) => url.trim().isNotEmpty)
-          .toList(growable: false),
+      imageUrls: _readStringList(data['imageUrls']),
+      lastMessageImageUrls: _readStringList(data['lastMessageImageUrls']),
       status: (data['status'] as String?)?.trim() ?? 'open',
       createdAt: data['createdAt'] is Timestamp
           ? (data['createdAt'] as Timestamp).toDate()
@@ -1251,6 +1778,7 @@ class AdminSupportTicket {
   final String topicLabel;
   final String message;
   final List<String> imageUrls;
+  final List<String> lastMessageImageUrls;
   final String status;
   final DateTime? createdAt;
   final DateTime? updatedAt;
@@ -1261,6 +1789,151 @@ class AdminSupportTicket {
 
   bool get isOpen => status == 'open';
   bool get isContactClosed => contactClosed || status == 'closed';
+
+  List<String> get inboxPreviewImageUrls {
+    if (lastMessageImageUrls.isNotEmpty) {
+      return lastMessageImageUrls;
+    }
+    return imageUrls;
+  }
+}
+
+enum AdminWorkItemKind {
+  productReview,
+  supportTicket,
+}
+
+class AdminWorkItem {
+  const AdminWorkItem({
+    required this.kind,
+    required this.sortTime,
+    required this.needsAttention,
+    this.ticket,
+    this.product,
+  });
+
+  final AdminWorkItemKind kind;
+  final DateTime sortTime;
+  final bool needsAttention;
+  final AdminSupportTicket? ticket;
+  final AdminProductRecord? product;
+}
+
+class AdminWorkInboxSnapshot {
+  const AdminWorkInboxSnapshot({
+    required this.items,
+    required this.attentionCount,
+    required this.productReviewCount,
+    required this.unreadTicketCount,
+  });
+
+  final List<AdminWorkItem> items;
+  final int attentionCount;
+  final int productReviewCount;
+  final int unreadTicketCount;
+}
+
+extension AdminRepositoryWorkInbox on AdminRepository {
+  static Stream<AdminWorkInboxSnapshot> streamWorkInbox({
+    String? sourceApp,
+    AdminWorkItemKind? kindFilter,
+  }) {
+    return Stream<AdminWorkInboxSnapshot>.multi((controller) {
+      List<AdminSupportTicket>? tickets;
+      List<AdminProductRecord>? products;
+
+      void emitIfReady() {
+        if (tickets == null || products == null) {
+          return;
+        }
+
+        final items = <AdminWorkItem>[];
+
+        final includeProducts =
+            kindFilter == null || kindFilter == AdminWorkItemKind.productReview;
+        if (includeProducts && (sourceApp == null || sourceApp == 'van1')) {
+          for (final product in products!) {
+            items.add(
+              AdminWorkItem(
+                kind: AdminWorkItemKind.productReview,
+                sortTime: product.updatedAt ?? DateTime.fromMillisecondsSinceEpoch(0),
+                needsAttention: true,
+                product: product,
+              ),
+            );
+          }
+        }
+
+        final includeTickets =
+            kindFilter == null || kindFilter == AdminWorkItemKind.supportTicket;
+        if (includeTickets) {
+          for (final ticket in tickets!) {
+            if (ticket.isContactClosed) {
+              continue;
+            }
+            if (sourceApp != null &&
+                sourceApp.isNotEmpty &&
+                ticket.sourceApp != sourceApp) {
+              continue;
+            }
+            items.add(
+              AdminWorkItem(
+                kind: AdminWorkItemKind.supportTicket,
+                sortTime: ticket.updatedAt ??
+                    ticket.createdAt ??
+                    DateTime.fromMillisecondsSinceEpoch(0),
+                needsAttention: ticket.unreadForAdmin,
+                ticket: ticket,
+              ),
+            );
+          }
+        }
+
+        items.sort((left, right) {
+          final attentionCompare =
+              (right.needsAttention ? 1 : 0).compareTo(left.needsAttention ? 1 : 0);
+          if (attentionCompare != 0) {
+            return attentionCompare;
+          }
+          return right.sortTime.compareTo(left.sortTime);
+        });
+
+        final unreadTicketCount = tickets!
+            .where((ticket) => ticket.unreadForAdmin && !ticket.isContactClosed)
+            .length;
+        final productReviewCount = products!.length;
+
+        controller.add(
+          AdminWorkInboxSnapshot(
+            items: items,
+            attentionCount: unreadTicketCount + productReviewCount,
+            productReviewCount: productReviewCount,
+            unreadTicketCount: unreadTicketCount,
+          ),
+        );
+      }
+
+      final ticketSub = AdminRepositorySupport.streamSupportTickets().listen(
+        (value) {
+          tickets = value;
+          emitIfReady();
+        },
+        onError: controller.addError,
+      );
+      final productSub = AdminRepository.streamPendingAiProductReviews().listen(
+        (value) {
+          products = value;
+          emitIfReady();
+        },
+        onError: controller.addError,
+      );
+
+      controller.onCancel = () async {
+        await ticketSub.cancel();
+        await productSub.cancel();
+      };
+    });
+  }
 }
 
 extension AdminRepositorySupport on AdminRepository {
@@ -1379,6 +2052,7 @@ extension AdminRepositorySupport on AdminRepository {
       'status': nextStatus,
       'lastMessagePreview': preview,
       'lastMessageRole': 'admin',
+      'lastMessageImageUrls': imageUrls,
       'unreadForRequester': true,
       'unreadForAdmin': false,
       if (adminUid != null) 'assignedAdminUid': adminUid,

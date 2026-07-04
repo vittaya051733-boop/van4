@@ -6,19 +6,13 @@ list(APPEND FLUTTER_PLUGIN_LIST
   agora_rtc_engine
   audioplayers_windows
   cloud_firestore
-  file_saver
   file_selector_windows
-  firebase_app_check
   firebase_auth
   firebase_core
   firebase_storage
-  geolocator_windows
   iris_method_channel
-  local_auth_windows
   permission_handler_windows
-  printing
   share_plus
-  speech_to_text_windows
   url_launcher_windows
 )
 

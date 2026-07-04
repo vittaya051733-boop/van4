@@ -1,9 +1,10 @@
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
-import 'package:van1/add_product_screen.dart';
 
+import 'admin_add_product_screen.dart';
 import 'admin_image_widgets.dart';
 import 'admin_repository.dart';
+import 'services/admin_merchant_contract_service.dart';
 
 Future<void> openAdminHelpUploadProduct(
   BuildContext context,
@@ -11,8 +12,8 @@ Future<void> openAdminHelpUploadProduct(
 ) {
   return Navigator.of(context).push<void>(
     MaterialPageRoute<void>(
-      builder: (_) => AddProductScreen(
-        adminUploadContext: AdminProductUploadContext(
+      builder: (_) => AdminAddProductScreen(
+        uploadContext: AdminProductUploadContext(
           ownerUid: shop.ownerId,
           shopName: shop.displayName,
           serviceType: shop.serviceType,
@@ -20,6 +21,38 @@ Future<void> openAdminHelpUploadProduct(
       ),
     ),
   );
+}
+
+Future<bool?> openAdminEditPendingReview(
+  BuildContext context,
+  AdminProductRecord product,
+) async {
+  try {
+    final draft =
+        await AdminRepository.fetchPendingProductReviewDraft(product.id);
+    if (!context.mounted) {
+      return null;
+    }
+    return Navigator.of(context).push<bool>(
+      MaterialPageRoute<bool>(
+        builder: (_) => AdminAddProductScreen(
+          uploadContext: AdminProductUploadContext(
+            ownerUid: draft.ownerUid,
+            shopName: draft.shopName,
+            serviceType: draft.serviceType,
+          ),
+          editReviewId: product.id,
+        ),
+      ),
+    );
+  } catch (error) {
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('เปิดแก้ไขไม่สำเร็จ: $error')),
+      );
+    }
+    return null;
+  }
 }
 
 class ShopManagementScreen extends StatefulWidget {
@@ -118,6 +151,7 @@ class _IllegalAiProductsPanelState extends State<_IllegalAiProductsPanel> {
         adminUid: adminUid,
       );
       if (mounted) {
+        Navigator.of(context).maybePop();
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('อนุมัติ "${product.name}" — ขึ้นขายแล้ว')),
         );
@@ -174,6 +208,7 @@ class _IllegalAiProductsPanelState extends State<_IllegalAiProductsPanel> {
         reason: reasonController.text,
       );
       if (mounted) {
+        Navigator.of(context).maybePop();
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('ปฏิเสธ "${product.name}" แล้ว')),
         );
@@ -192,46 +227,30 @@ class _IllegalAiProductsPanelState extends State<_IllegalAiProductsPanel> {
     }
   }
 
-  void _showProductDetail(AdminProductRecord product) {
-    showDialog<void>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: Text(product.name),
-        content: SingleChildScrollView(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: <Widget>[
-              if (product.imageUrls.isNotEmpty)
-                ClipRRect(
-                  borderRadius: BorderRadius.circular(12),
-                  child: AdminSafeNetworkImage(
-                    url: product.imageUrls.first,
-                    width: double.infinity,
-                    height: 160,
-                  ),
-                ),
-              const SizedBox(height: 12),
-              Text('ร้าน: ${product.shopName ?? product.ownerUid ?? '-'}'),
-              Text('ราคา: ฿${product.price?.toStringAsFixed(2) ?? '-'}'),
-              Text('ประเภท: ${product.reviewType == 'update' ? 'แก้ไขสินค้าเดิม' : 'สินค้าใหม่'}'),
-              const SizedBox(height: 8),
-              const Text(
-                'เหตุผลจาก AI',
-                style: TextStyle(fontWeight: FontWeight.w700),
-              ),
-              Text(product.aiReviewSummary),
-            ],
-          ),
+  void _openProductDetail(AdminProductRecord product) {
+    Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (_) => AdminPendingProductReviewScreen(
+          product: product,
+          processing: _processingReviewIds.contains(product.id),
+          onApprove: () => _approve(product),
+          onReject: () => _reject(product),
+          onEdit: product.needsLowConfidenceReview
+              ? () => _editPendingReview(product)
+              : null,
         ),
-        actions: <Widget>[
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext),
-            child: const Text('ปิด'),
-          ),
-        ],
       ),
     );
+  }
+
+  Future<void> _editPendingReview(AdminProductRecord product) async {
+    final edited = await openAdminEditPendingReview(context, product);
+    if (edited == true && mounted) {
+      Navigator.of(context).maybePop();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('แก้ไข "${product.name}" แล้ว — ยังอยู่ในคิวรอตรวจสอบ')),
+      );
+    }
   }
 
   @override
@@ -261,9 +280,9 @@ class _IllegalAiProductsPanelState extends State<_IllegalAiProductsPanel> {
           margin: const EdgeInsets.fromLTRB(16, 16, 16, 0),
           padding: const EdgeInsets.all(14),
           decoration: BoxDecoration(
-            color: const Color(0xFFFFF7ED),
+            color: Colors.white,
             borderRadius: BorderRadius.circular(18),
-            border: Border.all(color: const Color(0xFFFDBA74)),
+            border: Border.all(color: const Color(0xFFE5E7EB)),
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -284,110 +303,118 @@ class _IllegalAiProductsPanelState extends State<_IllegalAiProductsPanel> {
                 ],
               ),
               const SizedBox(height: 10),
-              ...products.map(
-                (product) {
-                  final processing = _processingReviewIds.contains(product.id);
-                  return Padding(
-                  padding: const EdgeInsets.only(bottom: 8),
-                  child: Material(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(14),
-                    child: InkWell(
+              ConstrainedBox(
+                constraints: BoxConstraints(
+                  maxHeight: MediaQuery.sizeOf(context).height * 0.42,
+                ),
+                child: ListView.separated(
+                  shrinkWrap: true,
+                  itemCount: products.length,
+                  separatorBuilder: (_, __) => const SizedBox(height: 8),
+                  itemBuilder: (context, index) {
+                    final product = products[index];
+                    final processing = _processingReviewIds.contains(product.id);
+                    return Material(
+                      color: Colors.white,
                       borderRadius: BorderRadius.circular(14),
-                      onTap: processing ? null : () => _showProductDetail(product),
-                      child: Padding(
-                        padding: const EdgeInsets.all(10),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.stretch,
-                          children: <Widget>[
-                        Row(
-                          children: <Widget>[
-                            ClipRRect(
-                              borderRadius: BorderRadius.circular(8),
-                              child: product.imageUrls.isNotEmpty
-                                  ? AdminSafeNetworkImage(
-                                      url: product.imageUrls.first,
-                                      width: 52,
-                                      height: 52,
-                                    )
-                                  : const SizedBox(
-                                      width: 52,
-                                      height: 52,
-                                      child: Icon(Icons.warning_amber_outlined),
-                                    ),
-                            ),
-                            const SizedBox(width: 10),
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
+                      child: InkWell(
+                        borderRadius: BorderRadius.circular(14),
+                        onTap: processing ? null : () => _openProductDetail(product),
+                        child: Padding(
+                          padding: const EdgeInsets.all(10),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: <Widget>[
+                              Row(
                                 children: <Widget>[
-                                  Text(
-                                    product.name,
-                                    style: const TextStyle(fontWeight: FontWeight.w700),
+                                  ClipRRect(
+                                    borderRadius: BorderRadius.circular(8),
+                                    child: product.imageUrls.isNotEmpty
+                                        ? AdminSafeNetworkImage(
+                                            url: product.imageUrls.first,
+                                            width: 52,
+                                            height: 52,
+                                          )
+                                        : const SizedBox(
+                                            width: 52,
+                                            height: 52,
+                                            child: Icon(Icons.warning_amber_outlined),
+                                          ),
                                   ),
-                                  Text(
-                                    product.shopName ?? product.ownerUid ?? 'ไม่ระบุร้าน',
-                                    style: const TextStyle(
-                                      color: Color(0xFF6B7280),
-                                      fontSize: 13,
+                                  const SizedBox(width: 10),
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: <Widget>[
+                                        Text(
+                                          product.name,
+                                          style: const TextStyle(fontWeight: FontWeight.w700),
+                                        ),
+                                        Text(
+                                          product.shopName ?? product.ownerUid ?? 'ไม่ระบุร้าน',
+                                          style: const TextStyle(
+                                            color: Color(0xFF6B7280),
+                                            fontSize: 13,
+                                          ),
+                                        ),
+                                        Text(
+                                          product.aiReviewSummary,
+                                          maxLines: 2,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: TextStyle(
+                                            color: product.isAiIllegalInThailand
+                                                ? const Color(0xFFB91C1C)
+                                                : const Color(0xFFB45309),
+                                            fontSize: 12,
+                                          ),
+                                        ),
+                                      ],
                                     ),
                                   ),
-                                  Text(
-                                    product.aiReviewSummary,
-                                    maxLines: 2,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: TextStyle(
-                                      color: product.isAiIllegalInThailand
-                                          ? const Color(0xFFB91C1C)
-                                          : const Color(0xFFB45309),
-                                      fontSize: 12,
+                                  const Icon(Icons.chevron_right, color: Color(0xFF9CA3AF)),
+                                ],
+                              ),
+                              const SizedBox(height: 8),
+                              Row(
+                                children: <Widget>[
+                                  Expanded(
+                                    child: OutlinedButton.icon(
+                                      onPressed: processing ? null : () => _reject(product),
+                                      icon: const Icon(Icons.block_outlined, size: 16),
+                                      label: const Text('ปฏิเสธ'),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                    child: FilledButton.icon(
+                                      onPressed: processing ? null : () => _approve(product),
+                                      style: FilledButton.styleFrom(
+                                        backgroundColor: const Color(0xFF16A34A),
+                                      ),
+                                      icon: processing
+                                          ? const SizedBox(
+                                              width: 16,
+                                              height: 16,
+                                              child: CircularProgressIndicator(
+                                                strokeWidth: 2,
+                                                color: Colors.white,
+                                              ),
+                                            )
+                                          : const Icon(Icons.check_circle_outline, size: 16),
+                                      label: Text(
+                                        processing ? 'กำลังดำเนินการ...' : 'อนุมัติขึ้นขาย',
+                                      ),
                                     ),
                                   ),
                                 ],
                               ),
-                            ),
-                            const Icon(Icons.chevron_right, color: Color(0xFF9CA3AF)),
-                          ],
-                        ),
-                            const SizedBox(height: 8),
-                            Row(
-                              children: <Widget>[
-                                Expanded(
-                                  child: OutlinedButton.icon(
-                                    onPressed: processing ? null : () => _reject(product),
-                                    icon: const Icon(Icons.block_outlined, size: 16),
-                                    label: const Text('ปฏิเสธ'),
-                                  ),
-                                ),
-                                const SizedBox(width: 8),
-                                Expanded(
-                                  child: FilledButton.icon(
-                                    onPressed: processing ? null : () => _approve(product),
-                                    style: FilledButton.styleFrom(
-                                      backgroundColor: const Color(0xFF16A34A),
-                                    ),
-                                    icon: processing
-                                        ? const SizedBox(
-                                            width: 16,
-                                            height: 16,
-                                            child: CircularProgressIndicator(
-                                              strokeWidth: 2,
-                                              color: Colors.white,
-                                            ),
-                                          )
-                                        : const Icon(Icons.check_circle_outline, size: 16),
-                                    label: Text(processing ? 'กำลังดำเนินการ...' : 'อนุมัติขึ้นขาย'),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ],
+                            ],
+                          ),
                         ),
                       ),
-                    ),
-                  ),
-                );
-                },
+                    );
+                  },
+                ),
               ),
             ],
           ),
@@ -523,6 +550,77 @@ class _ShopCard extends StatelessWidget {
   final AdminShopMediaSettings mediaSettings;
   final String? displayImageUrl;
 
+  Future<void> _cancelContract(BuildContext context) async {
+    final reasonController = TextEditingController();
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text('ยกเลิกสัญญา — ${shop.displayName}'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            const Text(
+              'หลังยกเลิกสัญญา ร้านค้าจะถอนเครดิตในกระเป๋าเงินได้ '
+              '(ตามยอดที่ Cloud Function คำนวณ)',
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: reasonController,
+              decoration: const InputDecoration(
+                labelText: 'เหตุผล (ไม่บังคับ)',
+                border: OutlineInputBorder(),
+              ),
+              maxLines: 3,
+            ),
+          ],
+        ),
+        actions: <Widget>[
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('ปิด'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: const Color(0xFFB45309)),
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('ยกเลิกสัญญา'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true || !context.mounted) {
+      reasonController.dispose();
+      return;
+    }
+
+    try {
+      await AdminMerchantContractService.instance.cancelMerchantContract(
+        merchantUid: shop.ownerId,
+        reason: reasonController.text,
+      );
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('ยกเลิกสัญญา ${shop.displayName} แล้ว — ปลดล็อกถอนเครดิต'),
+          ),
+        );
+      }
+    } catch (error) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'ยกเลิกสัญญาไม่สำเร็จ: ${AdminMerchantContractService.errorMessage(error)}',
+            ),
+          ),
+        );
+      }
+    } finally {
+      reasonController.dispose();
+    }
+  }
+
   Future<void> _approve(BuildContext context) async {
     final adminUid = FirebaseAuth.instance.currentUser?.uid;
     if (adminUid == null) {
@@ -597,65 +695,90 @@ class _ShopCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return _AdminInfoCard(
-      title: shop.displayName,
-      subtitle: '${shop.serviceType} • ${shop.status}',
-      imageUrl: displayImageUrl,
-      statusChip: _StatusChip(
-        label: shop.isApproved
-            ? 'approved'
-            : shop.isRejected
-                ? 'rejected'
-                : shop.isPendingReview
-                    ? 'pending'
-                    : shop.status,
-      ),
-      detailLines: <String>[
-        'เจ้าของ (van1): ${shop.ownerId}',
-        if (shop.phone != null) 'โทร: ${shop.phone}',
-        if (shop.email != null) 'อีเมล: ${shop.email}',
-        if (shop.address != null) 'ที่อยู่: ${shop.address}',
-        'จำกัดรูป: ${mediaSettings.maxImageCount} รูป',
-        'อัปโหลดวิดีโอ: ${mediaSettings.canUploadVideo ? 'อนุญาต' : 'ไม่อนุญาต'}',
-        'แหล่งข้อมูล: ${shop.collection}',
-        'โปรไฟล์ครบ: ${shop.isProfileCompleted ? 'ใช่' : 'ยังไม่ครบ'}',
-        if (shop.createdAt != null) 'อัปเดต: ${_formatDateTime(shop.createdAt!)}',
-      ],
-      actions: <Widget>[
-        if (!shop.isApproved && !shop.isRejected)
-          FilledButton.icon(
-            onPressed: () => _approve(context),
-            style: FilledButton.styleFrom(backgroundColor: const Color(0xFF16A34A)),
-            icon: const Icon(Icons.check_circle_outline, size: 18),
-            label: const Text('อนุมัติ'),
+    return StreamBuilder<AdminMerchantWalletSnapshot?>(
+      stream: AdminMerchantContractService.instance.watchMerchantWallet(shop.ownerId),
+      builder: (context, walletSnapshot) {
+        final wallet = walletSnapshot.data;
+        final contractCancelled = wallet?.isContractCancelled ?? false;
+        final walletLines = <String>[
+          if (wallet != null)
+            'เครดิตร้าน: ${wallet.totalCredit.toStringAsFixed(2)} บาท '
+            '(ถอนได้ ${wallet.withdrawableCredit.toStringAsFixed(2)} / '
+            'ล็อก ${wallet.lockedCredit.toStringAsFixed(2)})',
+          if (wallet != null)
+            'สัญญา: ${contractCancelled ? 'ยกเลิกแล้ว' : 'ยังมีผล'}',
+        ];
+
+        return _AdminInfoCard(
+          title: shop.displayName,
+          subtitle: '${shop.serviceType} • ${shop.status}',
+          imageUrl: displayImageUrl,
+          statusChip: _StatusChip(
+            label: contractCancelled
+                ? 'contract cancelled'
+                : shop.isApproved
+                    ? 'approved'
+                    : shop.isRejected
+                        ? 'rejected'
+                        : shop.isPendingReview
+                            ? 'pending'
+                            : shop.status,
           ),
-        if (!shop.isApproved && !shop.isRejected) const SizedBox(width: 8),
-        IconButton(
-          tooltip: 'ตั้งค่ารูป/วิดีโอ',
-          onPressed: () => showShopMediaSettingsDialog(context, shop: shop),
-          icon: const Icon(Icons.tune_outlined),
-        ),
-        IconButton(
-          tooltip: 'ดูสินค้า',
-          onPressed: () => Navigator.of(context).push(
-            MaterialPageRoute<void>(
-              builder: (_) => ShopUploadedProductsScreen(shop: shop),
+          detailLines: <String>[
+            'เจ้าของ (van1): ${shop.ownerId}',
+            if (shop.phone != null) 'โทร: ${shop.phone}',
+            if (shop.email != null) 'อีเมล: ${shop.email}',
+            if (shop.address != null) 'ที่อยู่: ${shop.address}',
+            ...walletLines,
+            'จำกัดรูป: ${mediaSettings.maxImageCount} รูป',
+            'อัปโหลดวิดีโอ: ${mediaSettings.canUploadVideo ? 'อนุญาต' : 'ไม่อนุญาต'}',
+            'แหล่งข้อมูล: ${shop.collection}',
+            'โปรไฟล์ครบ: ${shop.isProfileCompleted ? 'ใช่' : 'ยังไม่ครบ'}',
+            if (shop.createdAt != null) 'อัปเดต: ${_formatDateTime(shop.createdAt!)}',
+          ],
+          actions: <Widget>[
+            if (!shop.isApproved && !shop.isRejected)
+              FilledButton.icon(
+                onPressed: () => _approve(context),
+                style: FilledButton.styleFrom(backgroundColor: const Color(0xFF16A34A)),
+                icon: const Icon(Icons.check_circle_outline, size: 18),
+                label: const Text('อนุมัติ'),
+              ),
+            if (!shop.isApproved && !shop.isRejected) const SizedBox(width: 8),
+            IconButton(
+              tooltip: 'ตั้งค่ารูป/วิดีโอ',
+              onPressed: () => showShopMediaSettingsDialog(context, shop: shop),
+              icon: const Icon(Icons.tune_outlined),
             ),
-          ),
-          icon: const Icon(Icons.inventory_2_outlined),
-        ),
-        IconButton(
-          tooltip: 'ช่วยอัปโหลด',
-          onPressed: () => openAdminHelpUploadProduct(context, shop),
-          icon: const Icon(Icons.upload_outlined),
-        ),
-        if (!shop.isRejected)
-          OutlinedButton.icon(
-            onPressed: shop.isApproved ? null : () => _reject(context),
-            icon: const Icon(Icons.block_outlined, size: 18),
-            label: const Text('ปฏิเสธ'),
-          ),
-      ],
+            IconButton(
+              tooltip: 'ดูสินค้า',
+              onPressed: () => Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) => ShopUploadedProductsScreen(shop: shop),
+                ),
+              ),
+              icon: const Icon(Icons.inventory_2_outlined),
+            ),
+            IconButton(
+              tooltip: 'ช่วยอัปโหลด',
+              onPressed: () => openAdminHelpUploadProduct(context, shop),
+              icon: const Icon(Icons.upload_outlined),
+            ),
+            if (shop.isApproved && !contractCancelled)
+              OutlinedButton.icon(
+                onPressed: () => _cancelContract(context),
+                icon: const Icon(Icons.gavel_outlined, size: 18),
+                label: const Text('ยกเลิกสัญญา'),
+              ),
+            if (!shop.isRejected)
+              OutlinedButton.icon(
+                onPressed: shop.isApproved ? null : () => _reject(context),
+                icon: const Icon(Icons.block_outlined, size: 18),
+                label: const Text('ปฏิเสธ'),
+              ),
+          ],
+        );
+      },
     );
   }
 }
@@ -741,6 +864,123 @@ Future<void> showShopMediaSettingsDialog(
   }
 }
 
+class AdminPendingProductReviewScreen extends StatelessWidget {
+  const AdminPendingProductReviewScreen({
+    super.key,
+    required this.product,
+    required this.processing,
+    required this.onApprove,
+    required this.onReject,
+    this.onEdit,
+  });
+
+  final AdminProductRecord product;
+  final bool processing;
+  final VoidCallback onApprove;
+  final VoidCallback onReject;
+  final VoidCallback? onEdit;
+
+  @override
+  Widget build(BuildContext context) {
+    final description = product.description?.trim();
+    return Scaffold(
+      appBar: AppBar(
+        backgroundColor: const Color(0xFFE65100),
+        foregroundColor: Colors.white,
+        title: Text(product.name, maxLines: 1, overflow: TextOverflow.ellipsis),
+      ),
+      body: ListView(
+        padding: const EdgeInsets.all(16),
+        children: <Widget>[
+          if (product.imageUrls.isNotEmpty)
+            SizedBox(
+              height: 220,
+              child: ListView.separated(
+                scrollDirection: Axis.horizontal,
+                itemCount: product.imageUrls.length,
+                separatorBuilder: (_, __) => const SizedBox(width: 10),
+                itemBuilder: (context, index) {
+                  return ClipRRect(
+                    borderRadius: BorderRadius.circular(12),
+                    child: AdminSafeNetworkImage(
+                      url: product.imageUrls[index],
+                      width: 220,
+                      height: 220,
+                    ),
+                  );
+                },
+              ),
+            ),
+          const SizedBox(height: 16),
+          Text(
+            product.name,
+            style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                  fontWeight: FontWeight.w800,
+                ),
+          ),
+          const SizedBox(height: 8),
+          Text('ร้าน: ${product.shopName ?? product.ownerUid ?? '-'}'),
+          Text('ราคา: ฿${formatAdminBaht(product.price)}'),
+          Text(
+            'ประเภท: ${product.reviewType == 'update' ? 'แก้ไขสินค้าเดิม' : 'สินค้าใหม่'}',
+          ),
+          if (description != null && description.isNotEmpty) ...<Widget>[
+            const SizedBox(height: 12),
+            const Text('รายละเอียด', style: TextStyle(fontWeight: FontWeight.w700)),
+            Text(description),
+          ],
+          const SizedBox(height: 12),
+          const Text('เหตุผลจาก AI', style: TextStyle(fontWeight: FontWeight.w700)),
+          Text(product.aiReviewSummary),
+          if (onEdit != null) ...<Widget>[
+            const SizedBox(height: 16),
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                onPressed: processing ? null : onEdit,
+                icon: const Icon(Icons.edit_outlined, size: 18),
+                label: const Text('แก้ไขรายละเอียด (ความมั่นใจต่ำกว่า 80%)'),
+              ),
+            ),
+          ],
+          const SizedBox(height: 20),
+          Row(
+            children: <Widget>[
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: processing ? null : onReject,
+                  icon: const Icon(Icons.block_outlined, size: 16),
+                  label: const Text('ปฏิเสธ'),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: FilledButton.icon(
+                  onPressed: processing ? null : onApprove,
+                  style: FilledButton.styleFrom(
+                    backgroundColor: const Color(0xFF16A34A),
+                  ),
+                  icon: processing
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: Colors.white,
+                          ),
+                        )
+                      : const Icon(Icons.check_circle_outline, size: 16),
+                  label: Text(processing ? 'กำลังดำเนินการ...' : 'อนุมัติขึ้นขาย'),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class ShopUploadedProductsScreen extends StatelessWidget {
   const ShopUploadedProductsScreen({super.key, required this.shop});
 
@@ -797,7 +1037,7 @@ class ShopUploadedProductsScreen extends StatelessWidget {
                 ),
                 title: Text(product.name),
                 subtitle: Text(
-                  '฿${product.price?.toStringAsFixed(2) ?? '-'} • สต็อก ${product.stock ?? 0}'
+                  '฿${formatAdminBaht(product.price)} • สต็อก ${product.stock ?? 0}'
                   '${product.uploadedByAdmin ? ' • แอดมินอัปโหลด' : ''}'
                   '${product.videoUrl != null ? ' • มีวิดีโอ' : ''}',
                 ),

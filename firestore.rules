@@ -1,7 +1,40 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Start secure by default. Update this for app-specific access rules.
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isAdminFromRegistry() {
+      return signedIn()
+          && request.auth.token.email != null
+          && firestore.get(/databases/(default)/documents/admins/$(request.auth.token.email.lower())).data.active != false;
+    }
+
+    // OAuth tokens — Cloud Functions (Admin SDK) only
+    match /social_account_secrets/{accountId} {
+      allow read, write: if false;
+    }
+
+    match /social_accounts/{accountId} {
+      allow read: if isAdminFromRegistry();
+      allow create, update, delete: if isAdminFromRegistry();
+    }
+
+    match /social_posts/{postId} {
+      allow read, create, update, delete: if isAdminFromRegistry();
+    }
+
+    match /social_comments/{commentId} {
+      allow read: if isAdminFromRegistry();
+      allow create: if isAdminFromRegistry();
+      allow update, delete: if isAdminFromRegistry();
+    }
+
+    match /social_oauth_states/{stateId} {
+      allow read, write: if false;
+    }
+
     match /{document=**} {
       allow read, write: if false;
     }

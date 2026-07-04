@@ -1,7 +1,32 @@
 rules_version = '2';
 service firebase.storage {
   match /b/{bucket}/o {
-    // Start secure by default. Update for app-specific paths and claims.
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isAdminFromRegistry() {
+      return signedIn()
+          && request.auth.token.email != null
+          && firestore.get(/databases/(default)/documents/admins/$(request.auth.token.email.lower())).data.active != false;
+    }
+
+    match /project_finance/receipts/{expenseId}/{allPaths=**} {
+      allow read, write: if isAdminFromRegistry();
+    }
+
+    match /product_images/{ownerId}/{allPaths=**} {
+      allow read: if true;
+      allow write: if isAdminFromRegistry();
+    }
+
+    match /social_media/{postId}/{allPaths=**} {
+      allow read: if isAdminFromRegistry();
+      allow write: if isAdminFromRegistry()
+          && request.resource.size < 500 * 1024 * 1024
+          && request.resource.contentType.matches('video/.*|image/.*');
+    }
+
     match /{allPaths=**} {
       allow read, write: if false;
     }

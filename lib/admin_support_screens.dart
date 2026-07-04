@@ -89,7 +89,7 @@ class _AdminSupportInboxScreenState extends State<AdminSupportInboxScreen> {
                   separatorBuilder: (_, __) => const SizedBox(height: 10),
                   itemBuilder: (context, index) {
                     final ticket = tickets[index];
-                    return _SupportTicketTile(
+                    return AdminSupportTicketTile(
                       ticket: ticket,
                       onTap: () {
                         Navigator.of(context).push(
@@ -399,7 +399,7 @@ class _AdminSupportTicketDetailScreenState
                     width: double.infinity,
                     padding: const EdgeInsets.all(12),
                     decoration: BoxDecoration(
-                      color: const Color(0xFFF3F4F6),
+                      color: Colors.white,
                       borderRadius: BorderRadius.circular(12),
                       border: Border.all(color: const Color(0xFFD1D5DB)),
                     ),
@@ -650,8 +650,9 @@ class _AdminReplyComposer extends StatelessWidget {
   }
 }
 
-class _SupportTicketTile extends StatelessWidget {
-  const _SupportTicketTile({
+class AdminSupportTicketTile extends StatelessWidget {
+  const AdminSupportTicketTile({
+    super.key,
     required this.ticket,
     required this.onTap,
   });
@@ -669,57 +670,68 @@ class _SupportTicketTile extends StatelessWidget {
         onTap: onTap,
         child: Padding(
           padding: const EdgeInsets.all(14),
-          child: Column(
+          child: Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: <Widget>[
-              _BadgeRow(
-                sourceLabel: ticket.sourceLabel,
-                sourceApp: ticket.sourceApp,
-                status: ticket.status,
-              ),
-              const SizedBox(height: 8),
-              Text(
-                ticket.topicLabel,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                  fontWeight: FontWeight.w800,
-                  fontSize: 15,
-                ),
-              ),
-              const SizedBox(height: 4),
-              Text(
-                ticket.requesterName,
-                style: const TextStyle(color: Color(0xFF6B7280), fontSize: 13),
-              ),
-              const SizedBox(height: 6),
-              Text(
-                ticket.lastMessagePreview?.trim().isNotEmpty == true
-                    ? ticket.lastMessagePreview!.trim()
-                    : ticket.message,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(fontSize: 13, height: 1.35),
-              ),
-              if (ticket.unreadForAdmin)
-                Padding(
-                  padding: const EdgeInsets.only(top: 8),
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFDC2626).withValues(alpha: 0.12),
-                      borderRadius: BorderRadius.circular(999),
+              if (ticket.inboxPreviewImageUrls.isNotEmpty) ...<Widget>[
+                AdminWorkInboxThumbnail(imageUrls: ticket.inboxPreviewImageUrls),
+                const SizedBox(width: 12),
+              ],
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    _BadgeRow(
+                      sourceLabel: ticket.sourceLabel,
+                      sourceApp: ticket.sourceApp,
+                      status: ticket.status,
                     ),
-                    child: const Text(
-                      'มีข้อความใหม่',
-                      style: TextStyle(
-                        color: Color(0xFFDC2626),
-                        fontSize: 11,
+                    const SizedBox(height: 8),
+                    Text(
+                      ticket.topicLabel,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
                         fontWeight: FontWeight.w800,
+                        fontSize: 15,
                       ),
                     ),
-                  ),
+                    const SizedBox(height: 4),
+                    Text(
+                      ticket.requesterName,
+                      style: const TextStyle(color: Color(0xFF6B7280), fontSize: 13),
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      ticket.lastMessagePreview?.trim().isNotEmpty == true
+                          ? ticket.lastMessagePreview!.trim()
+                          : ticket.message,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontSize: 13, height: 1.35),
+                    ),
+                    if (ticket.unreadForAdmin)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 8),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFDC2626).withValues(alpha: 0.12),
+                            borderRadius: BorderRadius.circular(999),
+                          ),
+                          child: const Text(
+                            'มีข้อความใหม่',
+                            style: TextStyle(
+                              color: Color(0xFFDC2626),
+                              fontSize: 11,
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                        ),
+                      ),
+                  ],
                 ),
+              ),
             ],
           ),
         ),

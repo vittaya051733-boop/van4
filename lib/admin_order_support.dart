@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:share_plus/share_plus.dart';
 
 import 'admin_repository.dart';
+import 'admin_settlement_support.dart';
 
 enum AdminOrderCategory {
   success,
@@ -13,24 +14,59 @@ enum AdminOrderCategory {
   refund,
 }
 
-/// อัตราหักสำหรับสรุป CSV ฝั่งแอดมิน
-class AdminSettlementRates {
-  AdminSettlementRates._();
+/// อัตราหักสำหรับสรุป CSV ฝั่งแอดมิน (กำหนดได้ใน platform_config/settlement)
+class AdminSettlementFeeRates {
+  const AdminSettlementFeeRates({
+    this.gpRate = 0.18,
+    this.riderPlatformRate = 0.15,
+    this.leaderRate = 0.15,
+  });
 
-  static const double gpRate = 0.18;
-  static const double leaderRate = 0.15;
-  static const double shippingPlatformRate = 0.15;
+  static const AdminSettlementFeeRates defaults = AdminSettlementFeeRates();
 
-  static double afterGp(double productSubtotal) => productSubtotal * (1 - gpRate);
+  final double gpRate;
+  final double riderPlatformRate;
+  final double leaderRate;
 
-  static double shopNet(double productSubtotal) =>
+  double get gpRatePercent => gpRate * 100;
+  double get riderPlatformRatePercent => riderPlatformRate * 100;
+  double get leaderRatePercent => leaderRate * 100;
+
+  double afterGp(double productSubtotal) =>
+      productSubtotal * (1 - gpRate);
+
+  double shopNet(double productSubtotal) =>
       afterGp(productSubtotal) * (1 - leaderRate);
 
-  static double shippingPlatformFee(double grossShipping) =>
-      grossShipping * shippingPlatformRate;
+  double shippingPlatformFee(double grossShipping) =>
+      grossShipping * riderPlatformRate;
 
-  static double riderNetShipping(double grossShipping) =>
-      grossShipping * (1 - shippingPlatformRate);
+  double riderNetShipping(double grossShipping) =>
+      grossShipping * (1 - riderPlatformRate);
+
+  static AdminSettlementFeeRates fromFirestore(Map<String, dynamic>? data) {
+    if (data == null) {
+      return defaults;
+    }
+    return AdminSettlementFeeRates(
+      gpRate: _readRatePercent(data, 'gpRatePercent', 18) / 100,
+      riderPlatformRate:
+          _readRatePercent(data, 'riderPlatformRatePercent', 15) / 100,
+      leaderRate: _readRatePercent(data, 'leaderRatePercent', 15) / 100,
+    );
+  }
+
+  static double _readRatePercent(
+    Map<String, dynamic> data,
+    String key,
+    double fallback,
+  ) {
+    final value = data[key];
+    if (value is num && value >= 0 && value <= 100) {
+      return value.toDouble();
+    }
+    return fallback;
+  }
 }
 
 extension AdminOrderCategoryX on AdminOrderCategory {
@@ -92,22 +128,23 @@ extension AdminOrderSettlementX on AdminOrderRecord {
     return 0;
   }
 
-  double get gpDeduction =>
-      resolvedProductSubtotal * AdminSettlementRates.gpRate;
+  double gpDeduction(AdminSettlementFeeRates rates) =>
+      resolvedProductSubtotal * rates.gpRate;
 
-  double get afterGpDeduction =>
-      AdminSettlementRates.afterGp(resolvedProductSubtotal);
+  double afterGpDeduction(AdminSettlementFeeRates rates) =>
+      rates.afterGp(resolvedProductSubtotal);
 
-  double get leaderDeduction =>
-      afterGpDeduction * AdminSettlementRates.leaderRate;
+  double leaderDeduction(AdminSettlementFeeRates rates) =>
+      afterGpDeduction(rates) * rates.leaderRate;
 
-  double get shopNetPayout => AdminSettlementRates.shopNet(resolvedProductSubtotal);
+  double shopNetPayout(AdminSettlementFeeRates rates) =>
+      rates.shopNet(resolvedProductSubtotal);
 
-  double get shippingPlatformFee =>
-      AdminSettlementRates.shippingPlatformFee(resolvedShippingFee);
+  double shippingPlatformFee(AdminSettlementFeeRates rates) =>
+      rates.shippingPlatformFee(resolvedShippingFee);
 
-  double get riderNetShippingIncome =>
-      AdminSettlementRates.riderNetShipping(resolvedShippingFee);
+  double riderNetShippingIncome(AdminSettlementFeeRates rates) =>
+      rates.riderNetShipping(resolvedShippingFee);
 
   double get refundAmount {
     if (grandTotal != null && grandTotal! > 0) {
@@ -183,6 +220,8 @@ class AdminDailyCsvBundle {
 AdminDailyCsvBundle buildAllDailySettlementCsvBundle({
   required DateTime reportDate,
   required List<AdminOrderRecord> orders,
+  AdminSettlementBankDirectory? banks,
+  AdminSettlementFeeRates rates = AdminSettlementFeeRates.defaults,
 }) {
   final dateKey =
       '${reportDate.year}${reportDate.month.toString().padLeft(2, '0')}${reportDate.day.toString().padLeft(2, '0')}';
@@ -194,37 +233,89 @@ AdminDailyCsvBundle buildAllDailySettlementCsvBundle({
     );
   }
 
+  final files = <AdminCsvExportFile>[
+    named(
+      'shipping',
+      buildShippingSettlementCsv(
+        reportDate: reportDate,
+        orders: orders,
+        banks: banks,
+        rates: rates,
+      ),
+    ),
+    named(
+      'products',
+      buildProductsSettlementCsv(
+        reportDate: reportDate,
+        orders: orders,
+      ),
+    ),
+    named(
+      'refunds',
+      buildRefundsSettlementCsv(reportDate: reportDate, orders: orders),
+    ),
+    named(
+      'shop',
+      buildShopSettlementCsv(
+        reportDate: reportDate,
+        orders: orders,
+        banks: banks,
+        rates: rates,
+      ),
+    ),
+  ];
+
+  if (banks != null) {
+    files.add(
+      named(
+        'bulk_transfer',
+        AdminSettlementSupport.buildBulkTransferCsv(
+          reportDate: reportDate,
+          orders: orders,
+          banks: banks,
+          rates: rates,
+        ),
+      ),
+    );
+  }
+
   return AdminDailyCsvBundle(
     reportDate: reportDate,
-    files: <AdminCsvExportFile>[
-      named(
-        'shipping',
-        buildShippingSettlementCsv(reportDate: reportDate, orders: orders),
-      ),
-      named(
-        'products',
-        buildProductsSettlementCsv(reportDate: reportDate, orders: orders),
-      ),
-      named(
-        'refunds',
-        buildRefundsSettlementCsv(reportDate: reportDate, orders: orders),
-      ),
-      named(
-        'shop',
-        buildShopSettlementCsv(reportDate: reportDate, orders: orders),
-      ),
-    ],
+    files: files,
+  );
+}
+
+Future<AdminDailyCsvBundle> buildAllDailySettlementCsvBundleAsync({
+  required DateTime reportDate,
+  required List<AdminOrderRecord> orders,
+}) async {
+  final banks = await AdminSettlementSupport.loadBankDirectory(orders: orders);
+  final rates = await AdminSettlementSupport.fetchSettlementFeeRates();
+  return buildAllDailySettlementCsvBundle(
+    reportDate: reportDate,
+    orders: orders,
+    banks: banks,
+    rates: rates,
   );
 }
 
 Future<void> exportAndShareDailySettlementCsvFiles({
   required DateTime reportDate,
   required List<AdminOrderRecord> orders,
+  bool markExported = true,
 }) async {
-  final bundle = buildAllDailySettlementCsvBundle(
+  final bundle = await buildAllDailySettlementCsvBundleAsync(
     reportDate: reportDate,
     orders: orders,
   );
+  if (markExported && orders.isNotEmpty) {
+    final batchId =
+        'export_${reportDate.year}${reportDate.month.toString().padLeft(2, '0')}${reportDate.day.toString().padLeft(2, '0')}_${DateTime.now().millisecondsSinceEpoch}';
+    await AdminSettlementSupport.markSettlementExported(
+      orders: orders,
+      batchId: batchId,
+    );
+  }
   await Share.shareXFiles(
     bundle.files
         .map(
@@ -244,47 +335,64 @@ Future<void> exportAndShareDailySettlementCsvFiles({
 String buildShippingSettlementCsv({
   required DateTime reportDate,
   required List<AdminOrderRecord> orders,
+  AdminSettlementBankDirectory? banks,
+  AdminSettlementFeeRates rates = AdminSettlementFeeRates.defaults,
 }) {
   final delivered = filterDeliveredOrders(orders);
+  final grouped = _groupOrdersByRider(delivered);
   final buffer = StringBuffer()
     ..writeln(
-      'report_date,order_code,order_id,shop,rider,gross_shipping,platform_fee_15pct,rider_net_85pct,delivered_at',
+      'วันที่รายงาน,หมายเลขออเดอร์,ชื่อผู้รับ,ชื่อธนาคาร,เลขที่บัญชี,ชื่อบัญชี,ยอดค่าส่งแต่ละออเดอร์,ยอดโอนรวม',
     );
 
-  var totalGross = 0.0;
-  var totalPlatform = 0.0;
-  var totalRiderNet = 0.0;
+  var totalTransfer = 0.0;
+  var orderCount = 0;
 
-  for (final order in delivered) {
-    final gross = order.resolvedShippingFee;
-    final platform = order.shippingPlatformFee;
-    final riderNet = order.riderNetShippingIncome;
-    totalGross += gross;
-    totalPlatform += platform;
-    totalRiderNet += riderNet;
+  for (final entry in grouped.entries) {
+    final riderOrders = entry.value;
+    if (riderOrders.isEmpty) {
+      continue;
+    }
+    orderCount += riderOrders.length;
+
+    final riderId = entry.key;
+    final riderBank = banks?.ridersById[riderId];
+    final riderName = riderOrders.first.driverName?.trim().isNotEmpty == true
+        ? riderOrders.first.driverName!.trim()
+        : riderId;
+    var transferTotal = 0.0;
+    final breakdown = <String>[];
+    final orderNumbers = <String>[];
+
+    for (final order in riderOrders) {
+      final net = order.riderNetShippingIncome(rates);
+      transferTotal += net;
+      orderNumbers.add(order.displayOrderNumber);
+      breakdown.add('${order.displayOrderNumber}:${_money(net)}');
+    }
+    totalTransfer += transferTotal;
 
     buffer.writeln(
       [
         _csvCell(_formatReportDate(reportDate)),
-        _csvCell(order.displayOrderNumber),
-        _csvCell(order.id),
-        _csvCell(order.shopName ?? order.shopOwnerId ?? ''),
-        _csvCell(order.driverName ?? order.driverId ?? ''),
-        _csvCell(_money(gross)),
-        _csvCell(_money(platform)),
-        _csvCell(_money(riderNet)),
-        _csvCell(order.deliveredAt != null ? _formatDateTime(order.deliveredAt!) : ''),
+        _csvCell(orderNumbers.join(', ')),
+        _csvCell(riderName),
+        _csvCell(riderBank?.bankName ?? ''),
+        _csvCell(riderBank?.accountNumber ?? ''),
+        _csvCell(riderBank?.accountName ?? ''),
+        _csvCell(breakdown.join('; ')),
+        _csvCell(_money(transferTotal)),
       ].join(','),
     );
   }
 
   buffer
     ..writeln()
-    ..writeln('summary_field,amount')
-    ..writeln('order_count,${delivered.length}')
-    ..writeln('total_gross_shipping,${_money(totalGross)}')
-    ..writeln('total_platform_fee_15pct,${_money(totalPlatform)}')
-    ..writeln('total_rider_net_85pct,${_money(totalRiderNet)}');
+    ..writeln('summary_field,value')
+    ..writeln('rider_count,${grouped.length}')
+    ..writeln('order_count,$orderCount')
+    ..writeln('total_transfer_amount,${_money(totalTransfer)}')
+    ..writeln('report_date,${_csvCell(_formatReportDate(reportDate))}');
 
   return buffer.toString();
 }
@@ -294,26 +402,45 @@ String buildProductsSettlementCsv({
   required List<AdminOrderRecord> orders,
 }) {
   final delivered = filterDeliveredOrders(orders);
+  final grouped = _groupOrdersByShop(delivered);
   final buffer = StringBuffer()
     ..writeln(
-      'report_date,order_code,order_id,shop,product_subtotal,item_count,delivered_at',
+      'วันที่รายงาน,ชื่อร้าน,หมายเลขออเดอร์,ยอดสินค้าแต่ละออเดอร์,รวมยอดสินค้า',
     );
 
   var totalProducts = 0.0;
+  var orderCount = 0;
 
-  for (final order in delivered) {
-    final productTotal = order.resolvedProductSubtotal;
-    totalProducts += productTotal;
+  for (final entry in grouped.entries) {
+    final shopOrders = entry.value;
+    if (shopOrders.isEmpty) {
+      continue;
+    }
+    orderCount += shopOrders.length;
+
+    var shopSubtotal = 0.0;
+    final orderNumbers = <String>[];
+    final breakdown = <String>[];
+
+    for (final order in shopOrders) {
+      final productTotal = order.resolvedProductSubtotal;
+      shopSubtotal += productTotal;
+      orderNumbers.add(order.displayOrderNumber);
+      breakdown.add('${order.displayOrderNumber}:${_money(productTotal)}');
+    }
+    totalProducts += shopSubtotal;
+
+    final shopName = shopOrders.first.shopName?.trim().isNotEmpty == true
+        ? shopOrders.first.shopName!.trim()
+        : entry.key;
 
     buffer.writeln(
       [
         _csvCell(_formatReportDate(reportDate)),
-        _csvCell(order.displayOrderNumber),
-        _csvCell(order.id),
-        _csvCell(order.shopName ?? order.shopOwnerId ?? ''),
-        _csvCell(_money(productTotal)),
-        _csvCell('${order.items.length}'),
-        _csvCell(order.deliveredAt != null ? _formatDateTime(order.deliveredAt!) : ''),
+        _csvCell(shopName),
+        _csvCell(orderNumbers.join(', ')),
+        _csvCell(breakdown.join('; ')),
+        _csvCell(_money(shopSubtotal)),
       ].join(','),
     );
   }
@@ -321,7 +448,8 @@ String buildProductsSettlementCsv({
   buffer
     ..writeln()
     ..writeln('summary_field,amount')
-    ..writeln('order_count,${delivered.length}')
+    ..writeln('shop_count,${grouped.length}')
+    ..writeln('order_count,$orderCount')
     ..writeln('total_product_subtotal,${_money(totalProducts)}');
 
   return buffer.toString();
@@ -334,7 +462,7 @@ String buildRefundsSettlementCsv({
   final refunds = filterRefundOrders(orders);
   final buffer = StringBuffer()
     ..writeln(
-      'report_date,order_code,order_id,shop,customer,status,refund_status,refund_amount,bank,account_name,account_number,cancel_reason,updated_at',
+      'วันที่รายงาน,หมายเลขออเดอร์,ชื่อผู้รับ,ชื่อธนาคาร,เลขที่บัญชี,ชื่อบัญชี,ยอดโอน,สถานะ,เหตุผล',
     );
 
   var totalRefund = 0.0;
@@ -342,23 +470,18 @@ String buildRefundsSettlementCsv({
   for (final order in refunds) {
     final amount = order.refundAmount;
     totalRefund += amount;
-    final updatedAt = order.cancelledAt ?? order.deliveredAt ?? order.createdAt;
 
     buffer.writeln(
       [
         _csvCell(_formatReportDate(reportDate)),
         _csvCell(order.displayOrderNumber),
-        _csvCell(order.id),
-        _csvCell(order.shopName ?? order.shopOwnerId ?? ''),
-        _csvCell(order.customerName ?? order.customerId ?? ''),
-        _csvCell(order.status),
-        _csvCell(order.refundStatus ?? ''),
-        _csvCell(_money(amount)),
+        _csvCell(order.customerName ?? order.refundAccountName ?? ''),
         _csvCell(order.refundBankName ?? ''),
-        _csvCell(order.refundAccountName ?? ''),
         _csvCell(order.refundBankAccountNumber ?? ''),
+        _csvCell(order.refundAccountName ?? ''),
+        _csvCell(_money(amount)),
+        _csvCell(order.refundStatus ?? order.status),
         _csvCell(order.cancelReason ?? ''),
-        _csvCell(updatedAt != null ? _formatDateTime(updatedAt) : ''),
       ].join(','),
     );
   }
@@ -375,45 +498,70 @@ String buildRefundsSettlementCsv({
 String buildShopSettlementCsv({
   required DateTime reportDate,
   required List<AdminOrderRecord> orders,
+  AdminSettlementBankDirectory? banks,
+  AdminSettlementFeeRates rates = AdminSettlementFeeRates.defaults,
 }) {
   final delivered = filterDeliveredOrders(orders);
+  final grouped = _groupOrdersByShop(delivered);
   final buffer = StringBuffer()
     ..writeln(
-      'report_date,order_code,order_id,shop,shop_owner_id,product_subtotal,gp_deduct_18pct,after_gp,leader_deduct_15pct,shop_net_payout,delivered_at',
+      'วันที่รายงาน,ชื่อร้าน,ชื่อธนาคาร,เลขที่บัญชี,ชื่อบัญชี,หมายเลขออเดอร์,ยอดสินค้าแต่ละออเดอร์,รวมยอดสินค้า,หักGP(${rates.gpRatePercent.toStringAsFixed(0)}%),หักไลด์เดอร์(${rates.leaderRatePercent.toStringAsFixed(0)}%),ยอดโอน',
     );
 
   var totalSubtotal = 0.0;
   var totalGp = 0.0;
-  var totalAfterGp = 0.0;
   var totalLeader = 0.0;
   var totalShopNet = 0.0;
+  var orderCount = 0;
 
-  for (final order in delivered) {
-    final subtotal = order.resolvedProductSubtotal;
-    final gp = order.gpDeduction;
-    final afterGp = order.afterGpDeduction;
-    final leader = order.leaderDeduction;
-    final shopNet = order.shopNetPayout;
+  for (final entry in grouped.entries) {
+    final shopOrders = entry.value;
+    if (shopOrders.isEmpty) {
+      continue;
+    }
+    orderCount += shopOrders.length;
 
-    totalSubtotal += subtotal;
-    totalGp += gp;
-    totalAfterGp += afterGp;
-    totalLeader += leader;
+    final shopOwnerId = entry.key;
+    final shopBank = banks?.shopsByOwnerId[shopOwnerId];
+    final shopName = shopOrders.first.shopName?.trim().isNotEmpty == true
+        ? shopOrders.first.shopName!.trim()
+        : shopOwnerId;
+
+    var shopSubtotal = 0.0;
+    var shopGp = 0.0;
+    var shopLeader = 0.0;
+    var shopNet = 0.0;
+    final orderNumbers = <String>[];
+    final breakdown = <String>[];
+
+    for (final order in shopOrders) {
+      final subtotal = order.resolvedProductSubtotal;
+      shopSubtotal += subtotal;
+      shopGp += order.gpDeduction(rates);
+      shopLeader += order.leaderDeduction(rates);
+      shopNet += order.shopNetPayout(rates);
+      orderNumbers.add(order.displayOrderNumber);
+      breakdown.add('${order.displayOrderNumber}:${_money(subtotal)}');
+    }
+
+    totalSubtotal += shopSubtotal;
+    totalGp += shopGp;
+    totalLeader += shopLeader;
     totalShopNet += shopNet;
 
     buffer.writeln(
       [
         _csvCell(_formatReportDate(reportDate)),
-        _csvCell(order.displayOrderNumber),
-        _csvCell(order.id),
-        _csvCell(order.shopName ?? ''),
-        _csvCell(order.shopOwnerId ?? ''),
-        _csvCell(_money(subtotal)),
-        _csvCell(_money(gp)),
-        _csvCell(_money(afterGp)),
-        _csvCell(_money(leader)),
+        _csvCell(shopName),
+        _csvCell(shopBank?.bankName ?? ''),
+        _csvCell(shopBank?.accountNumber ?? ''),
+        _csvCell(shopBank?.accountName ?? ''),
+        _csvCell(orderNumbers.join(', ')),
+        _csvCell(breakdown.join('; ')),
+        _csvCell(_money(shopSubtotal)),
+        _csvCell(_money(shopGp)),
+        _csvCell(_money(shopLeader)),
         _csvCell(_money(shopNet)),
-        _csvCell(order.deliveredAt != null ? _formatDateTime(order.deliveredAt!) : ''),
       ].join(','),
     );
   }
@@ -421,14 +569,42 @@ String buildShopSettlementCsv({
   buffer
     ..writeln()
     ..writeln('summary_field,amount')
-    ..writeln('order_count,${delivered.length}')
+    ..writeln('shop_count,${grouped.length}')
+    ..writeln('order_count,$orderCount')
     ..writeln('total_product_subtotal,${_money(totalSubtotal)}')
-    ..writeln('total_gp_deduct_18pct,${_money(totalGp)}')
-    ..writeln('total_after_gp,${_money(totalAfterGp)}')
-    ..writeln('total_leader_deduct_15pct,${_money(totalLeader)}')
+    ..writeln('total_gp_deduct,${_money(totalGp)}')
+    ..writeln('total_leader_deduct,${_money(totalLeader)}')
     ..writeln('total_shop_net_payout,${_money(totalShopNet)}');
 
   return buffer.toString();
+}
+
+Map<String, List<AdminOrderRecord>> _groupOrdersByShop(
+  List<AdminOrderRecord> orders,
+) {
+  final grouped = <String, List<AdminOrderRecord>>{};
+  for (final order in orders) {
+    final ownerId = order.shopOwnerId?.trim();
+    final key = (ownerId != null && ownerId.isNotEmpty)
+        ? ownerId
+        : order.shopName?.trim() ?? order.id;
+    grouped.putIfAbsent(key, () => <AdminOrderRecord>[]).add(order);
+  }
+  return grouped;
+}
+
+Map<String, List<AdminOrderRecord>> _groupOrdersByRider(
+  List<AdminOrderRecord> orders,
+) {
+  final grouped = <String, List<AdminOrderRecord>>{};
+  for (final order in orders) {
+    final riderId = order.driverId?.trim();
+    if (riderId == null || riderId.isEmpty) {
+      continue;
+    }
+    grouped.putIfAbsent(riderId, () => <AdminOrderRecord>[]).add(order);
+  }
+  return grouped;
 }
 
 class AdminDailyCsvScheduler {

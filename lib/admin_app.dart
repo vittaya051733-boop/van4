@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'admin_repository.dart';
 import 'admin_screens.dart';
 import 'services/admin_illegal_product_alert_service.dart';
+import 'services/admin_presence_service.dart';
 
 class VanMarketAdminApp extends StatelessWidget {
   const VanMarketAdminApp({super.key});
@@ -16,8 +17,19 @@ class VanMarketAdminApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       title: 'ADMIN',
       theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFFE65100)),
-        scaffoldBackgroundColor: const Color(0xFFFFF8F1),
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: const Color(0xFFE65100),
+          surface: Colors.white,
+        ),
+        scaffoldBackgroundColor: Colors.white,
+        canvasColor: Colors.white,
+        cardTheme: const CardThemeData(
+          color: Colors.white,
+          surfaceTintColor: Colors.transparent,
+        ),
+        dialogTheme: const DialogThemeData(
+          backgroundColor: Colors.white,
+        ),
       ),
       home: const AdminAuthGate(),
     );
@@ -51,6 +63,7 @@ class AdminAuthGate extends StatelessWidget {
             }
 
             if (adminSnapshot.data?.allowed == true) {
+              unawaited(AdminPresenceService.instance.ensureRegistered());
               return _AdminIllegalProductAlertHost(
                 child: AdminHomeScreen(user: user),
               );
@@ -154,7 +167,7 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
                             logoSize * 20 / 120,
                           ),
                           child: Image.asset(
-                            'assets/file_00000000be5472069245fc3bdb122dbb.png',
+                            'assets/app_logo.png',
                             width: logoSize,
                             height: logoSize,
                             fit: BoxFit.cover,
@@ -273,7 +286,7 @@ class _AdminLoadingScreen extends StatelessWidget {
             ClipRRect(
               borderRadius: BorderRadius.circular(logoSize * 20 / 120),
               child: Image.asset(
-                'assets/file_00000000be5472069245fc3bdb122dbb.png',
+                'assets/app_logo.png',
                 width: logoSize,
                 height: logoSize,
                 fit: BoxFit.cover,

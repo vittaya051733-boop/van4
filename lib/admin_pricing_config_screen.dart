@@ -303,7 +303,7 @@ class _AdminPricingConfigScreenState extends State<AdminPricingConfigScreen> {
       return const SizedBox.shrink();
     }
 
-    final Color background;
+    final Color background = Colors.white;
     final Color foreground;
     final IconData icon;
     final String title;
@@ -311,25 +311,21 @@ class _AdminPricingConfigScreenState extends State<AdminPricingConfigScreen> {
 
     switch (_saveStatus) {
       case _PricingSaveStatus.saving:
-        background = const Color(0xFFFFF7ED);
         foreground = const Color(0xFF9A3412);
         icon = Icons.cloud_upload_rounded;
         title = 'กำลังบันทึก...';
         subtitle = _saveStatusMessage;
       case _PricingSaveStatus.success:
-        background = const Color(0xFFECFDF5);
         foreground = const Color(0xFF166534);
         icon = Icons.check_circle_rounded;
         title = 'บันทึกสำเร็จ';
         subtitle = _saveStatusMessage;
       case _PricingSaveStatus.error:
-        background = const Color(0xFFFEF2F2);
         foreground = const Color(0xFFB91C1C);
         icon = Icons.error_outline_rounded;
         title = 'บันทึกไม่สำเร็จ';
         subtitle = _saveStatusMessage;
       case _PricingSaveStatus.idle:
-        background = const Color(0xFFF3F4F6);
         foreground = const Color(0xFF374151);
         icon = Icons.history_rounded;
         title = 'บันทึกล่าสุดในเซสชันนี้';

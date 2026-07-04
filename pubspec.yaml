@@ -16,7 +16,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 1.0.0+1
+version: 1.0.2+3
 
 environment:
   sdk: ^3.9.2
@@ -37,13 +37,20 @@ dependencies:
   cloud_firestore: ^6.1.0
   firebase_auth: ^6.1.2
   firebase_core: ^4.2.1
+  firebase_analytics: ^12.0.4
+  firebase_crashlytics: ^5.0.5
   firebase_storage: ^13.0.4
   cloud_functions: ^6.0.4
   image_picker: ^1.2.0
   share_plus: ^10.1.4
+  file_picker: ^10.3.2
+  uuid: ^4.5.1
   flutter_local_notifications: ^19.5.0
-  van1:
-    path: ../van1/my-flutter
+  url_launcher: ^6.3.2
+  firebase_messaging: ^16.0.4
+  agora_rtc_engine: ^6.5.3
+  permission_handler: ^12.0.1
+  audioplayers: ^5.2.1
 
 dev_dependencies:
   flutter_test:
@@ -106,16 +113,19 @@ flutter:
 flutter_launcher_icons:
   android: true
   ios: true
-  image_path: "assets/file_00000000be5472069245fc3bdb122dbb.png"
+  image_path: "assets/app_launcher_icon.png"
+  adaptive_icon_background: "#FFFFFF"
+  adaptive_icon_foreground: "assets/app_launcher_icon.png"
+  adaptive_icon_foreground_inset: 0
   remove_alpha_ios: true
   web:
     generate: true
-    image_path: "assets/file_00000000be5472069245fc3bdb122dbb.png"
+    image_path: "assets/app_launcher_icon.png"
     background_color: "#ffffff"
     theme_color: "#ffffff"
   windows:
     generate: true
-    image_path: "assets/file_00000000be5472069245fc3bdb122dbb.png"
+    image_path: "assets/app_launcher_icon.png"
   macos:
     generate: true
-    image_path: "assets/file_00000000be5472069245fc3bdb122dbb.png"
+    image_path: "assets/app_launcher_icon.png"

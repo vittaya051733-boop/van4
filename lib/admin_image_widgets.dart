@@ -21,7 +21,7 @@ class AdminSafeAvatar extends StatelessWidget {
       child: Container(
         width: size,
         height: size,
-        color: const Color(0xFFFFEDD5),
+        color: Colors.white,
         child: trimmed != null && trimmed.isNotEmpty
             ? Image.network(
                 trimmed,
@@ -83,7 +83,7 @@ class AdminSafeNetworkImage extends StatelessWidget {
       errorBuilder: (_, __, ___) => Container(
         width: width,
         height: height,
-        color: const Color(0xFFFFEDD5),
+        color: Colors.white,
         alignment: Alignment.center,
         child: Icon(
           Icons.broken_image_outlined,
@@ -97,6 +97,83 @@ class AdminSafeNetworkImage extends StatelessWidget {
       return image;
     }
     return ClipRRect(borderRadius: borderRadius!, child: image);
+  }
+}
+
+/// Thumbnail สำหรับรายการใน inbox งานแอดมิน (แสดงรูปแรก + badge ถ้ามีหลายรูป)
+class AdminWorkInboxThumbnail extends StatelessWidget {
+  const AdminWorkInboxThumbnail({
+    super.key,
+    required this.imageUrls,
+    this.size = 72,
+  });
+
+  final List<String> imageUrls;
+  final double size;
+
+  @override
+  Widget build(BuildContext context) {
+    final urls = imageUrls
+        .map((url) => url.trim())
+        .where((url) => url.isNotEmpty)
+        .toList(growable: false);
+    if (urls.isEmpty) {
+      return const SizedBox.shrink();
+    }
+
+    if (urls.length == 1) {
+      return AdminSafeNetworkImage(
+        url: urls.first,
+        width: size,
+        height: size,
+        borderRadius: BorderRadius.circular(12),
+      );
+    }
+
+    final visible = urls.take(3).toList(growable: false);
+    final extraCount = urls.length - visible.length;
+    final thumbSize = size * 0.72;
+
+    return SizedBox(
+      width: size,
+      height: size,
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: <Widget>[
+          for (var index = 0; index < visible.length; index++)
+            Positioned(
+              left: index * (thumbSize * 0.28),
+              top: index * (thumbSize * 0.12),
+              child: AdminSafeNetworkImage(
+                url: visible[index],
+                width: thumbSize,
+                height: thumbSize,
+                borderRadius: BorderRadius.circular(10),
+              ),
+            ),
+          if (extraCount > 0)
+            Positioned(
+              right: 0,
+              bottom: 0,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF111827).withValues(alpha: 0.78),
+                  borderRadius: BorderRadius.circular(999),
+                ),
+                child: Text(
+                  '+$extraCount',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 10,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
   }
 }
 
