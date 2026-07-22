@@ -715,6 +715,111 @@ class AdminSettlementSupport {
       },
       SetOptions(merge: true),
     );
+
+    if (normalized == 'paid' && (field == 'shopPayout' || field == 'riderPayout')) {
+      final orderSnap = await FirebaseFirestore.instance
+          .collection('orders')
+          .doc(orderDocumentId)
+          .get();
+      final orderData = orderSnap.data() ?? <String, dynamic>{};
+      final settlement = _readSettlementMap(orderData['settlement']);
+      final payout = _readSettlementMap(settlement?[field]);
+      final amount = _readAmount(payout?['amount']) ?? 0;
+      if (amount > 0) {
+        await _enqueuePayoutPaidNotification(
+          orderId: orderDocumentId,
+          orderData: orderData,
+          payoutType: field == 'shopPayout' ? 'shop' : 'rider',
+          amount: amount,
+        );
+      }
+    }
+  }
+
+  static Future<void> _enqueuePayoutPaidNotification({
+    required String orderId,
+    required Map<String, dynamic> orderData,
+    required String payoutType,
+    required double amount,
+  }) async {
+    final orderCode = orderData['orderCode']?.toString().trim();
+    final orderLabel = orderCode?.isNotEmpty == true
+        ? '#$orderCode'
+        : '#${orderId.substring(0, orderId.length.clamp(0, 8))}';
+    final body =
+        'ออเดอร์ $orderLabel ${amount.toStringAsFixed(2)} บาท • จ่ายแล้ว';
+    final notifications =
+        FirebaseFirestore.instance.collection('app_notifications');
+    final now = FieldValue.serverTimestamp();
+
+    if (payoutType == 'shop') {
+      final shopOwnerId = _readRecipientUid(
+        orderData['shopOwnerId'] ?? orderData['merchantId'] ?? orderData['shopId'],
+      );
+      if (shopOwnerId == null) {
+        return;
+      }
+      await notifications.add(<String, dynamic>{
+        'targetApp': 'van1',
+        'recipientUid': shopOwnerId,
+        'orderId': orderId,
+        'title': 'โอนเงินสำเร็จ',
+        'body': body,
+        'action': 'payout_paid',
+        'read': false,
+        'isRead': false,
+        'createdAt': now,
+      });
+      return;
+    }
+
+    final riderId = _readRecipientUid(
+      orderData['driverId'] ?? orderData['riderId'],
+    );
+    if (riderId == null) {
+      return;
+    }
+    await notifications.add(<String, dynamic>{
+      'targetApp': 'van3',
+      'recipientUid': riderId,
+      'orderId': orderId,
+      'title': 'โอนเงินสำเร็จ',
+      'body': body,
+      'action': 'payout_paid',
+      'read': false,
+      'isRead': false,
+      'createdAt': now,
+    });
+  }
+
+  static String? _readRecipientUid(Object? value) {
+    final text = value?.toString().trim();
+    if (text == null || text.isEmpty) {
+      return null;
+    }
+    return text;
+  }
+
+  static Map<String, dynamic>? _readSettlementMap(Object? value) {
+    if (value is Map<String, dynamic>) {
+      return value;
+    }
+    if (value is Map) {
+      return <String, dynamic>{
+        for (final entry in value.entries) entry.key.toString(): entry.value,
+      };
+    }
+    return null;
+  }
+
+  static double? _readAmount(Object? value) {
+    if (value is num) {
+      return value.toDouble();
+    }
+    if (value is String) {
+      return double.tryParse(value.trim());
+    }
+    return null;
   }
 
   static List<String> _splitOrderCodes(String raw) {
