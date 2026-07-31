@@ -22,6 +22,6 @@ alwaysApply: true
 ## คำสั่งเดียวที่ถูก
 
 ```powershell
-..\van2\scripts\deploy-self.ps1 -App van4 -Target storage -ConfirmDeploy "APPROVE:van4:van-merchant" -FinalAcknowledge "YES I UNDERSTAND"
-..\van2\scripts\deploy-self.ps1 -App van4 -Target firestore-van4 -ConfirmDeploy "APPROVE:van4:van-merchant" -FinalAcknowledge "YES I UNDERSTAND"
+..\van2\scripts\deploy-self.ps1 -App van4 -Target storage -ConfirmDeploy "อนุมัติ:van4:van-merchant" -ConfirmImpact "เฉพาะ:van4" -ConfirmFile "storage.rules" -FinalAcknowledge "ฉันเข้าใจแล้ว"
+..\van2\scripts\deploy-self.ps1 -App van4 -Target firestore-van4 -ConfirmDeploy "อนุมัติ:van4:van-merchant" -ConfirmImpact "เฉพาะ:van4" -ConfirmFile "firestore.rules" -FinalAcknowledge "ฉันเข้าใจแล้ว"
 ```
