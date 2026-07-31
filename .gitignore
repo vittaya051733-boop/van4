@@ -43,3 +43,13 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# Firebase CLI local cache
+.firebase/
+
+# Eclipse / Buildship IDE metadata
+android/.project
+android/.settings/
+
+# Local Android build output
+android/build/
