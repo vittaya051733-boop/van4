@@ -1,5 +1,9 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
+import 'dart:io';
+
+import 'admin_repository.dart';
 
 class AdminPromotionsScreen extends StatefulWidget {
   const AdminPromotionsScreen({super.key});
@@ -131,14 +135,35 @@ class _OfferCard extends StatelessWidget {
         ? Map<String, dynamic>.from(data['discount'] as Map)
         : const <String, dynamic>{};
     final discountLabel = _discountSummary(discount);
+    final distribution = (data['distribution'] ?? 'manual_code').toString();
+    final display = data['display'] is Map
+        ? Map<String, dynamic>.from(data['display'] as Map)
+        : const <String, dynamic>{};
+    final conditions = data['conditions'] is Map
+        ? Map<String, dynamic>.from(data['conditions'] as Map)
+        : const <String, dynamic>{};
+    final claimCount = (data['claimCount'] as num?)?.toInt() ?? 0;
+    final maxClaimsTotal = (conditions['maxClaimsTotal'] as num?)?.toInt() ?? 0;
+    final imageUrl = (display['imageUrl'] ?? '').toString();
 
     return Card(
       margin: const EdgeInsets.only(bottom: 10),
       child: ListTile(
+        leading: imageUrl.isNotEmpty
+            ? ClipRRect(
+                borderRadius: BorderRadius.circular(8),
+                child: Image.network(imageUrl, width: 48, height: 48, fit: BoxFit.cover),
+              )
+            : null,
         title: Text(name, style: const TextStyle(fontWeight: FontWeight.w800)),
         subtitle: Text(
           [
             if (code.isNotEmpty) 'โค้ด: $code',
+            if (isCoupon && distribution == 'self_claim') 'กดรับเอง',
+            if (isCoupon && distribution == 'self_claim')
+              'รับแล้ว ${maxClaimsTotal > 0 ? '$claimCount/$maxClaimsTotal' : '$claimCount'}',
+            if (isCoupon && display['presentation'] != null)
+              'แสดง: ${display['presentation']}',
             discountLabel,
             active ? 'เปิดใช้งาน' : 'ปิดอยู่',
           ].join(' • '),
@@ -192,6 +217,9 @@ class _OfferEditorScreenState extends State<_OfferEditorScreen> {
   late final TextEditingController _priorityController;
   late final TextEditingController _maxTotalController;
   late final TextEditingController _maxPerUserController;
+  late final TextEditingController _maxClaimsTotalController;
+  late final TextEditingController _popupTitleController;
+  late final TextEditingController _ctaTextController;
   late final TextEditingController _productIdsController;
   late final TextEditingController _shopIdsController;
 
@@ -200,6 +228,12 @@ class _OfferEditorScreenState extends State<_OfferEditorScreen> {
   String _discountType = 'percent';
   String _applyTo = 'subtotal';
   String _geoType = 'none';
+  String _distribution = 'manual_code';
+  String _presentation = 'inline';
+  DateTime? _startAt;
+  DateTime? _endAt;
+  String _imageUrl = '';
+  String? _localImagePath;
   bool _saving = false;
 
   @override
@@ -239,6 +273,12 @@ class _OfferEditorScreenState extends State<_OfferEditorScreen> {
         TextEditingController(text: '${conditions['maxRedemptionsTotal'] ?? ''}');
     _maxPerUserController =
         TextEditingController(text: '${conditions['maxRedemptionsPerUser'] ?? ''}');
+    _maxClaimsTotalController =
+        TextEditingController(text: '${conditions['maxClaimsTotal'] ?? ''}');
+    _popupTitleController =
+        TextEditingController(text: (display['popupTitle'] ?? data['name'] ?? '').toString());
+    _ctaTextController =
+        TextEditingController(text: (display['ctaText'] ?? 'รับคูปอง').toString());
     _productIdsController = TextEditingController(
       text: _joinList(conditions['productIds']),
     );
@@ -253,6 +293,26 @@ class _OfferEditorScreenState extends State<_OfferEditorScreen> {
     _discountType = (discount['type'] ?? 'percent').toString();
     _applyTo = (discount['applyTo'] ?? 'subtotal').toString();
     _geoType = (geo['type'] ?? 'none').toString();
+    _distribution = widget.isCoupon
+        ? (data['distribution'] ?? 'manual_code').toString()
+        : 'manual_code';
+    _presentation = (display['presentation'] ?? 'inline').toString();
+    _imageUrl = (display['imageUrl'] ?? '').toString();
+    _startAt = _parseDateTime(conditions['startAt']);
+    _endAt = _parseDateTime(conditions['endAt']);
+  }
+
+  DateTime? _parseDateTime(dynamic value) {
+    if (value == null) {
+      return null;
+    }
+    if (value is Timestamp) {
+      return value.toDate();
+    }
+    if (value is DateTime) {
+      return value;
+    }
+    return null;
   }
 
   @override
@@ -268,6 +328,9 @@ class _OfferEditorScreenState extends State<_OfferEditorScreen> {
     _priorityController.dispose();
     _maxTotalController.dispose();
     _maxPerUserController.dispose();
+    _maxClaimsTotalController.dispose();
+    _popupTitleController.dispose();
+    _ctaTextController.dispose();
     _productIdsController.dispose();
     _shopIdsController.dispose();
     super.dispose();
@@ -302,6 +365,39 @@ class _OfferEditorScreenState extends State<_OfferEditorScreen> {
           ? null
           : double.parse(_minSubtotalController.text.trim());
 
+      final displayPayload = <String, dynamic>{
+        'shortLabel': _shortLabelController.text.trim(),
+        'homeBannerText': _homeBannerController.text.trim(),
+        'badgeText': _badgeController.text.trim(),
+        if (_imageUrl.isNotEmpty) 'imageUrl': _imageUrl,
+        if (widget.isCoupon && _distribution == 'self_claim') ...<String, dynamic>{
+          'presentation': _presentation,
+          'popupTitle': _popupTitleController.text.trim().isEmpty
+              ? _nameController.text.trim()
+              : _popupTitleController.text.trim(),
+          'ctaText': _ctaTextController.text.trim().isEmpty
+              ? 'รับคูปอง'
+              : _ctaTextController.text.trim(),
+        },
+      };
+
+      final conditionsPayload = <String, dynamic>{
+        if (minSubtotal != null) 'minSubtotal': minSubtotal,
+        if (_maxTotalController.text.trim().isNotEmpty)
+          'maxRedemptionsTotal': int.parse(_maxTotalController.text.trim()),
+        if (_maxPerUserController.text.trim().isNotEmpty)
+          'maxRedemptionsPerUser': int.parse(_maxPerUserController.text.trim()),
+        if (widget.isCoupon &&
+            _distribution == 'self_claim' &&
+            _maxClaimsTotalController.text.trim().isNotEmpty)
+          'maxClaimsTotal': int.parse(_maxClaimsTotalController.text.trim()),
+        if (_startAt != null) 'startAt': Timestamp.fromDate(_startAt!),
+        if (_endAt != null) 'endAt': Timestamp.fromDate(_endAt!),
+        'productIds': _splitIds(_productIdsController.text),
+        'shopIds': _splitIds(_shopIdsController.text),
+        'geo': <String, dynamic>{'type': _geoType},
+      };
+
       final payload = <String, dynamic>{
         'name': _nameController.text.trim(),
         'active': _active,
@@ -312,40 +408,50 @@ class _OfferEditorScreenState extends State<_OfferEditorScreen> {
           'applyTo': _applyTo,
           if (maxDiscount != null) 'maxDiscount': maxDiscount,
         },
-        'display': <String, dynamic>{
-          'shortLabel': _shortLabelController.text.trim(),
-          'homeBannerText': _homeBannerController.text.trim(),
-          'badgeText': _badgeController.text.trim(),
-        },
-        'conditions': <String, dynamic>{
-          if (minSubtotal != null) 'minSubtotal': minSubtotal,
-          if (_maxTotalController.text.trim().isNotEmpty)
-            'maxRedemptionsTotal':
-                int.parse(_maxTotalController.text.trim()),
-          if (_maxPerUserController.text.trim().isNotEmpty)
-            'maxRedemptionsPerUser':
-                int.parse(_maxPerUserController.text.trim()),
-          'productIds': _splitIds(_productIdsController.text),
-          'shopIds': _splitIds(_shopIdsController.text),
-          'geo': <String, dynamic>{'type': _geoType},
-        },
+        'display': displayPayload,
+        'conditions': conditionsPayload,
         'updatedAt': FieldValue.serverTimestamp(),
       };
 
       if (widget.isCoupon) {
         payload['code'] = _codeController.text.trim().toUpperCase();
         payload['stackableWithPromotion'] = _stackable;
+        payload['distribution'] = _distribution;
       } else {
         payload['stackableWithCoupon'] = _stackable;
       }
 
       final collection = FirebaseFirestore.instance.collection(widget.collection);
+      final docRef = widget.doc?.reference ?? collection.doc();
+
       if (widget.doc == null) {
         payload['redemptionCount'] = 0;
+        if (widget.isCoupon && _distribution == 'self_claim') {
+          payload['claimCount'] = 0;
+        }
         payload['createdAt'] = FieldValue.serverTimestamp();
-        await collection.add(payload);
+        await docRef.set(payload);
       } else {
-        await collection.doc(widget.doc!.id).set(payload, SetOptions(merge: true));
+        await docRef.set(payload, SetOptions(merge: true));
+      }
+
+      if (_localImagePath != null && widget.isCoupon && _distribution == 'self_claim') {
+        final uploadedUrl = await AdminRepository.uploadCouponImage(
+          couponId: docRef.id,
+          localPath: _localImagePath!,
+        );
+        if (uploadedUrl != null && uploadedUrl.isNotEmpty) {
+          await docRef.set(
+            <String, dynamic>{
+              'display': <String, dynamic>{
+                ...displayPayload,
+                'imageUrl': uploadedUrl,
+              },
+              'updatedAt': FieldValue.serverTimestamp(),
+            },
+            SetOptions(merge: true),
+          );
+        }
       }
 
       if (mounted) {
@@ -358,6 +464,68 @@ class _OfferEditorScreenState extends State<_OfferEditorScreen> {
         setState(() => _saving = false);
       }
     }
+  }
+
+  Future<void> _pickScheduleDate({required bool isStart}) async {
+    final initial = isStart
+        ? (_startAt ?? DateTime.now())
+        : (_endAt ?? DateTime.now().add(const Duration(days: 7)));
+    final date = await showDatePicker(
+      context: context,
+      initialDate: initial,
+      firstDate: DateTime(2024),
+      lastDate: DateTime(2035),
+    );
+    if (date == null) {
+      return;
+    }
+    if (!mounted) {
+      return;
+    }
+    final time = await showTimePicker(
+      context: context,
+      initialTime: TimeOfDay.fromDateTime(initial),
+    );
+    if (time == null) {
+      return;
+    }
+    final combined = DateTime(
+      date.year,
+      date.month,
+      date.day,
+      time.hour,
+      time.minute,
+    );
+    setState(() {
+      if (isStart) {
+        _startAt = combined;
+      } else {
+        _endAt = combined;
+      }
+    });
+  }
+
+  Future<void> _pickCouponImage() async {
+    final picker = ImagePicker();
+    final image = await picker.pickImage(
+      source: ImageSource.gallery,
+      maxWidth: 1600,
+      imageQuality: 85,
+    );
+    if (image == null) {
+      return;
+    }
+    setState(() {
+      _localImagePath = image.path;
+    });
+  }
+
+  String _formatSchedule(DateTime? value) {
+    if (value == null) {
+      return 'ยังไม่กำหนด';
+    }
+    final local = value.toLocal();
+    return '${local.day}/${local.month}/${local.year} ${local.hour.toString().padLeft(2, '0')}:${local.minute.toString().padLeft(2, '0')}';
   }
 
   void _showSnack(String message) {
@@ -407,6 +575,95 @@ class _OfferEditorScreenState extends State<_OfferEditorScreen> {
                 validator: (value) =>
                     value == null || value.trim().isEmpty ? 'กรุณากรอกโค้ด' : null,
               ),
+            if (widget.isCoupon) ...<Widget>[
+              const SizedBox(height: 12),
+              const Text('รูปแบบแจกคูปอง', style: TextStyle(fontWeight: FontWeight.w800)),
+              SegmentedButton<String>(
+                segments: const <ButtonSegment<String>>[
+                  ButtonSegment(value: 'manual_code', label: Text('ใส่โค้ดเอง')),
+                  ButtonSegment(value: 'self_claim', label: Text('กดรับเอง')),
+                ],
+                selected: <String>{_distribution},
+                onSelectionChanged: (selection) {
+                  setState(() => _distribution = selection.first);
+                },
+              ),
+            ],
+            if (widget.isCoupon && _distribution == 'self_claim') ...<Widget>[
+              const SizedBox(height: 12),
+              DropdownButtonFormField<String>(
+                value: _presentation,
+                decoration: const InputDecoration(labelText: 'รูปแบบแสดงบน van2'),
+                items: const <DropdownMenuItem<String>>[
+                  DropdownMenuItem(value: 'popup', child: Text('ป๊อปอัพ')),
+                  DropdownMenuItem(value: 'inline', child: Text('บนหน้าจอ')),
+                  DropdownMenuItem(value: 'both', child: Text('ทั้งสองแบบ')),
+                ],
+                onChanged: (value) {
+                  if (value != null) {
+                    setState(() => _presentation = value);
+                  }
+                },
+              ),
+              TextFormField(
+                controller: _popupTitleController,
+                decoration: const InputDecoration(labelText: 'หัวข้อป๊อปอัพ'),
+              ),
+              TextFormField(
+                controller: _ctaTextController,
+                decoration: const InputDecoration(labelText: 'ข้อความปุ่มรับ'),
+              ),
+              TextFormField(
+                controller: _maxClaimsTotalController,
+                decoration: const InputDecoration(labelText: 'จำนวนคนรับได้สูงสุด'),
+                keyboardType: TextInputType.number,
+              ),
+              TextFormField(
+                controller: _priorityController,
+                decoration: const InputDecoration(labelText: 'ลำดับความสำคัญ'),
+                keyboardType: TextInputType.number,
+              ),
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('วันเริ่ม'),
+                subtitle: Text(_formatSchedule(_startAt)),
+                trailing: TextButton(
+                  onPressed: () => _pickScheduleDate(isStart: true),
+                  child: const Text('เลือก'),
+                ),
+              ),
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('วันสิ้นสุด'),
+                subtitle: Text(_formatSchedule(_endAt)),
+                trailing: TextButton(
+                  onPressed: () => _pickScheduleDate(isStart: false),
+                  child: const Text('เลือก'),
+                ),
+              ),
+              const SizedBox(height: 8),
+              const Text('รูปคูปอง', style: TextStyle(fontWeight: FontWeight.w800)),
+              const SizedBox(height: 8),
+              if (_localImagePath != null || _imageUrl.isNotEmpty)
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(12),
+                  child: AspectRatio(
+                    aspectRatio: 16 / 9,
+                    child: _localImagePath != null
+                        ? Image.file(
+                            File(_localImagePath!),
+                            fit: BoxFit.cover,
+                          )
+                        : Image.network(_imageUrl, fit: BoxFit.cover),
+                  ),
+                ),
+              const SizedBox(height: 8),
+              OutlinedButton.icon(
+                onPressed: _pickCouponImage,
+                icon: const Icon(Icons.image_rounded),
+                label: const Text('เลือกรูป'),
+              ),
+            ],
             const SizedBox(height: 12),
             DropdownButtonFormField<String>(
               value: _discountType,

@@ -176,6 +176,8 @@ class _AdminSettlementFeeConfigScreenState
   final _gpController = TextEditingController();
   final _riderController = TextEditingController();
   final _leaderController = TextEditingController();
+  final _riderDelayController = TextEditingController();
+  final _shopDelayController = TextEditingController();
   bool _loading = true;
   bool _saving = false;
 
@@ -190,6 +192,8 @@ class _AdminSettlementFeeConfigScreenState
     _gpController.dispose();
     _riderController.dispose();
     _leaderController.dispose();
+    _riderDelayController.dispose();
+    _shopDelayController.dispose();
     super.dispose();
   }
 
@@ -200,6 +204,8 @@ class _AdminSettlementFeeConfigScreenState
       _gpController.text = _formatPercent(rates.gpRatePercent);
       _riderController.text = _formatPercent(rates.riderPlatformRatePercent);
       _leaderController.text = _formatPercent(rates.leaderRatePercent);
+      _riderDelayController.text = rates.riderCreditDelayMinutes.toString();
+      _shopDelayController.text = rates.shopCreditDelayMinutes.toString();
     } finally {
       if (mounted) {
         setState(() => _loading = false);
@@ -226,6 +232,18 @@ class _AdminSettlementFeeConfigScreenState
     return value;
   }
 
+  int? _parseDelayMinutes(String? raw) {
+    final text = raw?.trim();
+    if (text == null || text.isEmpty) {
+      return null;
+    }
+    final value = int.tryParse(text);
+    if (value == null || value < 0) {
+      return null;
+    }
+    return value;
+  }
+
   Future<void> _save() async {
     if (!_formKey.currentState!.validate()) {
       return;
@@ -235,11 +253,15 @@ class _AdminSettlementFeeConfigScreenState
       final gp = _parsePercent(_gpController.text)!;
       final rider = _parsePercent(_riderController.text)!;
       final leader = _parsePercent(_leaderController.text)!;
+      final riderDelay = _parseDelayMinutes(_riderDelayController.text)!;
+      final shopDelay = _parseDelayMinutes(_shopDelayController.text)!;
       await AdminSettlementSupport.saveSettlementFeeRates(
         AdminSettlementFeeRates(
           gpRate: gp / 100,
           riderPlatformRate: rider / 100,
           leaderRate: leader / 100,
+          riderCreditDelayMinutes: riderDelay,
+          shopCreditDelayMinutes: shopDelay,
         ),
       );
       if (!mounted) {
@@ -318,6 +340,34 @@ class _AdminSettlementFeeConfigScreenState
                         const TextInputType.numberWithOptions(decimal: true),
                     validator: (value) =>
                         _parsePercent(value) == null ? 'กรอก 0–100' : null,
+                  ),
+                  const SizedBox(height: 12),
+                  TextFormField(
+                    controller: _riderDelayController,
+                    decoration: const InputDecoration(
+                      labelText: 'หน่วงเครดิตไรเดอร์ (นาที)',
+                      helperText:
+                          'ค่าเริ่มต้น 120 นาที — ใช้ทั้งเดินทางและส่งสินค้า (COD / ชำระล่วงหน้า)',
+                      border: OutlineInputBorder(),
+                      suffixText: 'นาที',
+                    ),
+                    keyboardType: TextInputType.number,
+                    validator: (value) =>
+                        _parseDelayMinutes(value) == null ? 'กรอก 0 ขึ้นไป' : null,
+                  ),
+                  const SizedBox(height: 12),
+                  TextFormField(
+                    controller: _shopDelayController,
+                    decoration: const InputDecoration(
+                      labelText: 'หน่วงเครดิตร้านค้า (นาที)',
+                      helperText:
+                          'ค่าเริ่มต้น 120 นาที — COD และ Omise float รอปล่อยก่อนถอนได้',
+                      border: OutlineInputBorder(),
+                      suffixText: 'นาที',
+                    ),
+                    keyboardType: TextInputType.number,
+                    validator: (value) =>
+                        _parseDelayMinutes(value) == null ? 'กรอก 0 ขึ้นไป' : null,
                   ),
                   const SizedBox(height: 20),
                   FilledButton.icon(
@@ -460,3 +510,192 @@ class _AdminPayoutImportScreenState extends State<AdminPayoutImportScreen> {
     );
   }
 }
+
+class AdminOrderCreditReleasePanel extends StatefulWidget {
+  const AdminOrderCreditReleasePanel({
+    super.key,
+    required this.orderId,
+    required this.orderData,
+  });
+
+  final String orderId;
+  final Map<String, dynamic> orderData;
+
+  @override
+  State<AdminOrderCreditReleasePanel> createState() =>
+      _AdminOrderCreditReleasePanelState();
+}
+
+class _AdminOrderCreditReleasePanelState
+    extends State<AdminOrderCreditReleasePanel> {
+  bool _busy = false;
+
+  Map<String, dynamic>? _readMap(Object? value) {
+    if (value is Map<String, dynamic>) {
+      return value;
+    }
+    if (value is Map) {
+      return <String, dynamic>{
+        for (final entry in value.entries) entry.key.toString(): entry.value,
+      };
+    }
+    return null;
+  }
+
+  String _formatCreditReleaseStatus(String? raw) {
+    switch (raw?.trim().toLowerCase()) {
+      case 'scheduled':
+        return 'รอปล่อยตามเวลา';
+      case 'held':
+        return 'หยุดปล่อยชั่วคราว';
+      case 'released':
+        return 'ปล่อยแล้ว';
+      case 'blocked':
+        return 'บล็อกแล้ว';
+      default:
+        return raw?.trim().isNotEmpty == true ? raw!.trim() : '—';
+    }
+  }
+
+  Future<void> _runAction({
+    required String target,
+    required String action,
+  }) async {
+    setState(() => _busy = true);
+    try {
+      await AdminSettlementSupport.updateOrderCreditRelease(
+        orderId: widget.orderId,
+        target: target,
+        action: action,
+      );
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('อัปเดตเครดิต${target == 'rider' ? 'ไรเดอร์' : 'ร้าน'}แล้ว')),
+      );
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('ดำเนินการไม่สำเร็จ: $error')),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _busy = false);
+      }
+    }
+  }
+
+  Widget _buildTargetCard({
+    required String title,
+    required String target,
+    required Map<String, dynamic>? release,
+    required String? topLevelStatus,
+  }) {
+    if (release == null && (topLevelStatus == null || topLevelStatus.isEmpty)) {
+      return const SizedBox.shrink();
+    }
+
+    final status = topLevelStatus ?? release?['status']?.toString();
+    final amount = release?['amount'];
+    final canHold = status == 'scheduled';
+    final canReleaseNow =
+        status == 'scheduled' || status == 'held' || status == 'pending';
+    final canUnhold = status == 'held';
+    final canBlock = status == 'scheduled' || status == 'held';
+
+    return Card(
+      margin: const EdgeInsets.only(bottom: 10),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            Text(title, style: const TextStyle(fontWeight: FontWeight.w700)),
+            const SizedBox(height: 4),
+            Text('สถานะ: ${_formatCreditReleaseStatus(status)}'),
+            if (amount is num) Text('ยอด: ${amount.toStringAsFixed(2)} บาท'),
+            if (release?['holdReason'] != null)
+              Text('เหตุผล: ${release!['holdReason']}'),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: <Widget>[
+                if (canHold)
+                  OutlinedButton(
+                    onPressed: _busy
+                        ? null
+                        : () => _runAction(target: target, action: 'hold'),
+                    child: const Text('หยุดปล่อย'),
+                  ),
+                if (canUnhold)
+                  OutlinedButton(
+                    onPressed: _busy
+                        ? null
+                        : () => _runAction(target: target, action: 'unhold'),
+                    child: const Text('ปล่อยตามเวลา'),
+                  ),
+                if (canReleaseNow)
+                  FilledButton(
+                    onPressed: _busy
+                        ? null
+                        : () => _runAction(target: target, action: 'release_now'),
+                    child: const Text('ปล่อยทันที'),
+                  ),
+                if (canBlock)
+                  TextButton(
+                    onPressed: _busy
+                        ? null
+                        : () => _runAction(target: target, action: 'block'),
+                    child: const Text('บล็อก'),
+                  ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final settlement = _readMap(widget.orderData['settlement']);
+    final riderRelease = _readMap(settlement?['riderCreditRelease']);
+    final shopRelease = _readMap(settlement?['shopCreditRelease']);
+    final riderStatus = widget.orderData['riderCreditReleaseStatus']?.toString();
+    final shopStatus = widget.orderData['shopCreditReleaseStatus']?.toString();
+
+    if (riderRelease == null &&
+        shopRelease == null &&
+        riderStatus == null &&
+        shopStatus == null) {
+      return const SizedBox.shrink();
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        const Text(
+          'ควบคุมปล่อยเครดิต',
+          style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+        ),
+        const SizedBox(height: 8),
+        _buildTargetCard(
+          title: 'ไรเดอร์ (COD)',
+          target: 'rider',
+          release: riderRelease,
+          topLevelStatus: riderStatus,
+        ),
+        _buildTargetCard(
+          title: 'ร้านค้า (COD)',
+          target: 'shop',
+          release: shopRelease,
+          topLevelStatus: shopStatus,
+        ),
+      ],
+    );
+  }
+}
+

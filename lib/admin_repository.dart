@@ -883,6 +883,25 @@ class AdminRepository {
     return urls;
   }
 
+  static Future<String?> uploadCouponImage({
+    required String couponId,
+    required String localPath,
+  }) async {
+    final file = File(localPath);
+    if (!file.existsSync()) {
+      return null;
+    }
+
+    final fileName = file.uri.pathSegments.isNotEmpty
+        ? file.uri.pathSegments.last
+        : 'coupon.jpg';
+    final storagePath =
+        'platform_coupon_images/$couponId/${DateTime.now().millisecondsSinceEpoch}_$fileName';
+    final ref = FirebaseStorage.instance.ref().child(storagePath);
+    await ref.putFile(file);
+    return ref.getDownloadURL();
+  }
+
   static Future<void> _notifyApp({
     required String targetApp,
     required String recipientUid,

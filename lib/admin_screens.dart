@@ -698,6 +698,13 @@ class AdminOrderDetailScreen extends StatelessWidget {
               ],
             ),
           ),
+          if (order.status.toLowerCase() == 'delivered') ...<Widget>[
+            const SizedBox(height: 12),
+            AdminOrderCreditReleasePanel(
+              orderId: order.id,
+              orderData: order.rawData,
+            ),
+          ],
           if (order.isRefundCase) ...<Widget>[
             const SizedBox(height: 12),
             _detailSection(

@@ -20,6 +20,8 @@ class AdminSettlementFeeRates {
     this.gpRate = 0.18,
     this.riderPlatformRate = 0.15,
     this.leaderRate = 0.15,
+    this.riderCreditDelayMinutes = 120,
+    this.shopCreditDelayMinutes = 120,
   });
 
   static const AdminSettlementFeeRates defaults = AdminSettlementFeeRates();
@@ -27,6 +29,8 @@ class AdminSettlementFeeRates {
   final double gpRate;
   final double riderPlatformRate;
   final double leaderRate;
+  final int riderCreditDelayMinutes;
+  final int shopCreditDelayMinutes;
 
   double get gpRatePercent => gpRate * 100;
   double get riderPlatformRatePercent => riderPlatformRate * 100;
@@ -53,7 +57,21 @@ class AdminSettlementFeeRates {
       riderPlatformRate:
           _readRatePercent(data, 'riderPlatformRatePercent', 15) / 100,
       leaderRate: _readRatePercent(data, 'leaderRatePercent', 15) / 100,
+      riderCreditDelayMinutes: _readDelayMinutes(data, 'riderCreditDelayMinutes', 120),
+      shopCreditDelayMinutes: _readDelayMinutes(data, 'shopCreditDelayMinutes', 120),
     );
+  }
+
+  static int _readDelayMinutes(
+    Map<String, dynamic> data,
+    String key,
+    int fallback,
+  ) {
+    final value = data[key];
+    if (value is num && value >= 0) {
+      return value.round();
+    }
+    return fallback;
   }
 
   static double _readRatePercent(

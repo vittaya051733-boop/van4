@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:cloud_functions/cloud_functions.dart';
 
 import 'admin_repository.dart';
 import 'admin_order_support.dart';
@@ -186,9 +187,29 @@ class AdminSettlementSupport {
         'gpRatePercent': rates.gpRatePercent,
         'riderPlatformRatePercent': rates.riderPlatformRatePercent,
         'leaderRatePercent': rates.leaderRatePercent,
+        'riderCreditDelayMinutes': rates.riderCreditDelayMinutes,
+        'shopCreditDelayMinutes': rates.shopCreditDelayMinutes,
         'updatedAt': FieldValue.serverTimestamp(),
       },
       SetOptions(merge: true),
+    );
+  }
+
+  static Future<void> updateOrderCreditRelease({
+    required String orderId,
+    required String target,
+    required String action,
+    String? reason,
+  }) async {
+    final functions =
+        FirebaseFunctions.instanceFor(region: 'asia-southeast1');
+    await functions.httpsCallable('adminUpdateOrderCreditRelease').call(
+      <String, dynamic>{
+        'orderId': orderId,
+        'target': target,
+        'action': action,
+        if (reason != null && reason.trim().isNotEmpty) 'reason': reason.trim(),
+      },
     );
   }
 
@@ -684,6 +705,22 @@ class AdminSettlementSupport {
     final payout = settlement[key];
     if (payout is Map) {
       return payout['status']?.toString() ?? 'pending';
+    }
+    if (type == 'rider') {
+      final creditRelease = settlement['riderCreditRelease'];
+      if (creditRelease is Map) {
+        return creditRelease['status']?.toString() ??
+            order.rawData['riderCreditReleaseStatus']?.toString() ??
+            'pending';
+      }
+    }
+    if (type == 'shop') {
+      final creditRelease = settlement['shopCreditRelease'];
+      if (creditRelease is Map) {
+        return creditRelease['status']?.toString() ??
+            order.rawData['shopCreditReleaseStatus']?.toString() ??
+            'pending';
+      }
     }
     return 'pending';
   }
