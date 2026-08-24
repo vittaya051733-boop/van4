@@ -6,6 +6,11 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/foundation.dart';
 
+import 'data/catalog_taxonomy.dart';
+import 'models/home_page_lock_config.dart';
+import 'models/home_quick_action_config.dart';
+import 'models/home_shelves_config.dart';
+
 class AdminAccessCheck {
   const AdminAccessCheck({
     required this.allowed,
@@ -542,6 +547,61 @@ class AdminRepository {
     }, SetOptions(merge: true));
   }
 
+  static Stream<HomeQuickActionConfig> streamHomeQuickActions() {
+    return _firestore
+        .collection(platformCatalogCollection)
+        .doc(homeShelvesDocId)
+        .snapshots()
+        .map(
+          (snapshot) =>
+              HomeShelvesConfig.fromFirestore(snapshot.data()).quickActions,
+        );
+  }
+
+  static Stream<HomeShelvesConfig> streamHomeShelvesConfig() {
+    return _firestore
+        .collection(platformCatalogCollection)
+        .doc(homeShelvesDocId)
+        .snapshots()
+        .map((snapshot) => HomeShelvesConfig.fromFirestore(snapshot.data()));
+  }
+
+  static Future<void> saveHomeQuickActions({
+    required Map<String, bool> enabledById,
+    required String adminEmail,
+  }) async {
+    await _firestore
+        .collection(platformCatalogCollection)
+        .doc(homeShelvesDocId)
+        .set(<String, dynamic>{
+      'quickActions': enabledById,
+      'quickActionsUpdatedAt': FieldValue.serverTimestamp(),
+      'quickActionsUpdatedBy': adminEmail,
+    }, SetOptions(merge: true));
+  }
+
+  static Future<void> saveHomePageLock({
+    required bool enabled,
+    required String message,
+    required String adminEmail,
+  }) async {
+    final lock = HomePageLockConfig.fromLocal(
+      enabled: enabled,
+      message: message,
+    );
+    await _firestore
+        .collection(platformCatalogCollection)
+        .doc(homeShelvesDocId)
+        .set(<String, dynamic>{
+      'homeLock': <String, dynamic>{
+        'enabled': lock.enabled,
+        'message': lock.message,
+      },
+      'homeLockUpdatedAt': FieldValue.serverTimestamp(),
+      'homeLockUpdatedBy': adminEmail,
+    }, SetOptions(merge: true));
+  }
+
   /// สินค้าที่ AI ประเมินว่าต้องให้แอดมินตรวจสอบก่อน (ผิดกฎหมายหรือความมั่นใจต่ำ)
   static Stream<List<AdminProductRecord>> streamPendingAiProductReviews() {
     return _firestore
@@ -558,6 +618,81 @@ class AdminRepository {
         .where('adminReviewStatus', isEqualTo: 'pending')
         .snapshots()
         .map((snapshot) => _sortProducts(snapshot.docs));
+  }
+
+  /// สินค้าที่ AI จัดหมวดไม่มั่นใจ — รอแอดมินเลือก catalogType/catalogHeading
+  static Stream<List<AdminCatalogProductRecord>> streamPendingCatalogReviews() {
+    return _firestore
+        .collection('products')
+        .where('catalogReviewStatus', isEqualTo: 'pending')
+        .snapshots()
+        .map((snapshot) {
+      final records = snapshot.docs
+          .map(AdminCatalogProductRecord.fromSnapshot)
+          .where((record) => record.isActive)
+          .toList(growable: false);
+      records.sort((left, right) {
+        final leftTime = left.updatedAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+        final rightTime = right.updatedAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+        return rightTime.compareTo(leftTime);
+      });
+      return records;
+    });
+  }
+
+  static Stream<List<AdminCatalogProductRecord>> streamActiveProductsForCatalogFix() {
+    return _firestore
+        .collection('products')
+        .where('isActive', isEqualTo: true)
+        .snapshots()
+        .map((snapshot) {
+      final records = snapshot.docs
+          .map(AdminCatalogProductRecord.fromSnapshot)
+          .toList(growable: false);
+      records.sort((left, right) => right.name.compareTo(left.name));
+      return records;
+    });
+  }
+
+  static Future<void> approveProductCatalog({
+    required String productId,
+    required String catalogType,
+    required String catalogHeading,
+    required String adminUid,
+    String? serviceType,
+    String? customHeading,
+  }) async {
+    final trimmedType = catalogType.trim();
+    final trimmedHeading = (customHeading?.trim().isNotEmpty == true
+            ? customHeading!.trim()
+            : catalogHeading.trim());
+    if (trimmedType.isEmpty || trimmedHeading.isEmpty) {
+      throw Exception('กรุณาเลือกหมวดและหัวข้อ');
+    }
+
+    final typeSlug = CatalogTaxonomy.slugForLabel(trimmedType);
+    final headingSlug = CatalogTaxonomy.slugForLabel(trimmedHeading);
+    final typeSort = CatalogTaxonomy.typesForServiceType(serviceType)
+        .firstWhere(
+          (entry) => entry.label == trimmedType,
+          orElse: () => CatalogTaxonomy.marketTypes.last,
+        )
+        .sort;
+
+    await _firestore.collection('products').doc(productId).set(<String, dynamic>{
+      'catalogType': trimmedType,
+      'catalogTypeSlug': typeSlug,
+      'catalogTypeSort': typeSort,
+      'catalogHeading': trimmedHeading,
+      'catalogHeadingSlug': headingSlug,
+      'catalogReviewStatus': 'approved',
+      'catalogReviewReasons': FieldValue.delete(),
+      'catalogReviewReasonLabels': FieldValue.delete(),
+      'catalogAdminLocked': true,
+      'catalogReviewedBy': adminUid,
+      'catalogReviewedAt': FieldValue.serverTimestamp(),
+      'updatedAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
   }
 
   static Future<void> approveProductReview({
@@ -1216,6 +1351,88 @@ class AdminShopMediaSettings {
       maxImageCount: maxImages.clamp(1, 30),
       canUploadVideo: canVideo,
       shopImageUrl: _firstString(data, const <String>['shopImageUrl', 'imageUrl', 'photoUrl']),
+    );
+  }
+}
+
+class AdminCatalogProductRecord {
+  const AdminCatalogProductRecord({
+    required this.id,
+    required this.name,
+    required this.isActive,
+    required this.imageUrls,
+    required this.updatedAt,
+    this.ownerUid,
+    this.shopName,
+    this.serviceType,
+    this.catalogType,
+    this.catalogHeading,
+    this.catalogReviewStatus,
+    this.catalogReviewReasonLabels,
+    this.catalogTypeConfidence,
+    this.catalogHeadingConfidence,
+  });
+
+  final String id;
+  final String name;
+  final bool isActive;
+  final List<String> imageUrls;
+  final DateTime? updatedAt;
+  final String? ownerUid;
+  final String? shopName;
+  final String? serviceType;
+  final String? catalogType;
+  final String? catalogHeading;
+  final String? catalogReviewStatus;
+  final List<String>? catalogReviewReasonLabels;
+  final int? catalogTypeConfidence;
+  final int? catalogHeadingConfidence;
+
+  bool get isPendingCatalogReview => catalogReviewStatus == 'pending';
+
+  String get catalogReviewSummary {
+    final labels = catalogReviewReasonLabels ?? const <String>[];
+    if (labels.isNotEmpty) {
+      return labels.join(', ');
+    }
+    if (catalogType != null || catalogHeading != null) {
+      return 'AI แนะนำ: ${catalogType ?? '-'} / ${catalogHeading ?? '-'}';
+    }
+    return 'รอแอดมินเลือกหมวดสินค้า';
+  }
+
+  factory AdminCatalogProductRecord.fromSnapshot(
+    QueryDocumentSnapshot<Map<String, dynamic>> doc,
+  ) {
+    final data = doc.data();
+    final rawImages = data['imageUrls'];
+    final images = rawImages is List
+        ? rawImages
+            .map((item) => item.toString())
+            .where((String url) => url.trim().isNotEmpty)
+            .toList()
+        : <String>[];
+
+    return AdminCatalogProductRecord(
+      id: doc.id,
+      name: _firstString(data, const <String>['name']) ?? 'ไม่ระบุชื่อ',
+      isActive: data['isActive'] != false,
+      imageUrls: images,
+      updatedAt: _toDateTime(data['updatedAt']) ?? _toDateTime(data['createdAt']),
+      ownerUid: _firstString(data, const <String>['ownerUid']),
+      shopName: _firstString(data, const <String>['shopName']),
+      serviceType: _firstString(data, const <String>['serviceType', 'shopServiceType']),
+      catalogType: _firstString(data, const <String>['catalogType']),
+      catalogHeading: _firstString(data, const <String>['catalogHeading']),
+      catalogReviewStatus: _firstString(data, const <String>['catalogReviewStatus']),
+      catalogReviewReasonLabels: data['catalogReviewReasonLabels'] is List
+          ? (data['catalogReviewReasonLabels'] as List)
+              .map((item) => item.toString().trim())
+              .where((String item) => item.isNotEmpty)
+              .toList(growable: false)
+          : null,
+      catalogTypeConfidence: _toInt(data['catalogTypeConfidence']),
+      catalogHeadingConfidence: _toInt(data['catalogHeadingConfidence']),
     );
   }
 }

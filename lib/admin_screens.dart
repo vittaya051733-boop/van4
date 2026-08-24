@@ -2,6 +2,8 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
 import 'admin_announcement_screen.dart';
+import 'admin_catalog_review_screen.dart';
+import 'admin_ecosystem_health_screen.dart';
 import 'admin_home_shelves_screen.dart';
 import 'admin_pricing_config_screen.dart';
 import 'admin_project_finance_screen.dart';
@@ -9,10 +11,14 @@ import 'admin_promotions_screen.dart';
 import 'admin_image_widgets.dart';
 import 'admin_order_support.dart';
 import 'admin_payout_screens.dart';
+import 'admin_withdraw_queue_screen.dart';
 import 'admin_repository.dart';
 import 'admin_shop_screens.dart';
 import 'admin_social_dashboard_screen.dart';
 import 'admin_work_inbox_screen.dart';
+import 'admin_notifications_tab.dart';
+import 'admin_settings_tab.dart';
+import 'services/ecosystem_health_service.dart';
 
 class AdminHomeScreen extends StatefulWidget {
   const AdminHomeScreen({super.key, required this.user});
@@ -54,15 +60,9 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
         index: _tabIndex,
         children: <Widget>[
           AdminHomeMenuBody(user: widget.user),
-          const AdminWorkInboxScreen(embedded: true),
-          const _AdminPlaceholderTab(
-            icon: Icons.notifications_outlined,
-            message: 'แจ้งเตือนระบบจะมาในเวอร์ชันถัดไป',
-          ),
-          const _AdminPlaceholderTab(
-            icon: Icons.settings_outlined,
-            message: 'ตั้งค่าแอดมินจะมาในเวอร์ชันถัดไป',
-          ),
+          AdminWorkInboxScreen(embedded: true, openChatTab: _tabIndex == 1),
+          const AdminNotificationsTab(),
+          AdminSettingsTab(user: widget.user),
         ],
       ),
       bottomNavigationBar: StreamBuilder<AdminWorkInboxSnapshot>(
@@ -160,6 +160,27 @@ class AdminHomeMenuBody extends StatelessWidget {
           ),
         ),
         const SizedBox(height: 18),
+        ListenableBuilder(
+          listenable: EcosystemHealthService.instance,
+          builder: (context, _) {
+            final counts = EcosystemHealthService.instance.counts();
+            final fail = counts.fail;
+            return _AdminPrimaryButton(
+              icon: Icons.monitor_heart_outlined,
+              title: fail > 0
+                  ? 'สุขภาพระบบ — แดง $fail จุด'
+                  : 'สุขภาพระบบ / จุดเชื่อม Firebase',
+              subtitle:
+                  'รวม ${counts.total} จุด · เขียว ${counts.ok} · แดง ${counts.fail} · ยังไม่ตรวจ ${counts.unknown}',
+              onTap: () => Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) => const AdminEcosystemHealthScreen(),
+                ),
+              ),
+            );
+          },
+        ),
+        const SizedBox(height: 18),
         Text(
           'เมนูหลัก',
           style: Theme.of(context).textTheme.titleLarge?.copyWith(
@@ -190,8 +211,8 @@ class AdminHomeMenuBody extends StatelessWidget {
         const SizedBox(height: 12),
         _AdminPrimaryButton(
           icon: Icons.recommend_outlined,
-          title: 'สินค้าแนะนำหน้าแรก',
-          subtitle: 'เลือกสินค้าที่แสดงในชั้น "สินค้าแนะนำ" บน van2',
+          title: 'หน้าแรก van2',
+          subtitle: 'เปิด/ปิดปุ่มทางลัด • สินค้าแนะนำบนหน้าแรก',
           onTap: () => Navigator.of(context).push(
             MaterialPageRoute<void>(
               builder: (_) => const AdminHomeShelvesScreen(),
@@ -213,10 +234,21 @@ class AdminHomeMenuBody extends StatelessWidget {
         _AdminPrimaryButton(
           icon: Icons.local_offer_outlined,
           title: 'โปรโมชั่นและคูปอง',
-          subtitle: 'สร้างโปร/คูปอง + เลือกรูปแบบ UI บน van2',
+          subtitle: 'คูปองกดรับเอง (ป๊อปอัพ PNG) • โปรอัตโนมัติ • รูปแบบ UI van2',
           onTap: () => Navigator.of(context).push(
             MaterialPageRoute<void>(
               builder: (_) => const AdminPromotionsScreen(),
+            ),
+          ),
+        ),
+        const SizedBox(height: 12),
+        _AdminPrimaryButton(
+          icon: Icons.category_outlined,
+          title: 'จัดการหมวดสินค้า',
+          subtitle: 'สินค้า AI ไม่มั่นใจ • แก้หมวดผิด • เพิ่มหัวข้อใหม่',
+          onTap: () => Navigator.of(context).push(
+            MaterialPageRoute<void>(
+              builder: (_) => const AdminCatalogReviewScreen(),
             ),
           ),
         ),
@@ -277,6 +309,17 @@ class AdminHomeMenuBody extends StatelessWidget {
           onTap: () => Navigator.of(context).push(
             MaterialPageRoute<void>(
               builder: (_) => const AdminSettlementFeeConfigScreen(),
+            ),
+          ),
+        ),
+        const SizedBox(height: 12),
+        _AdminPrimaryButton(
+          icon: Icons.payments_outlined,
+          title: 'คิวถอนเงิน',
+          subtitle: 'PromptPay / ธนาคาร · QR · CSV · ยืนยันสลิป',
+          onTap: () => Navigator.of(context).push(
+            MaterialPageRoute<void>(
+              builder: (_) => const AdminWithdrawQueueScreen(),
             ),
           ),
         ),
