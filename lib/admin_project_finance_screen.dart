@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 
 import 'services/admin_project_finance_service.dart';
+import 'services/ecosystem_health_service.dart';
 
 class AdminProjectFinanceScreen extends StatefulWidget {
   const AdminProjectFinanceScreen({super.key});
@@ -37,6 +38,10 @@ class _AdminProjectFinanceScreenState extends State<AdminProjectFinanceScreen> {
         _snapshot = snapshot;
         _loadingSnapshot = false;
       });
+      EcosystemHealthService.instance.reportOk(
+        pointId: 'V4-PROJECT-ROI',
+        source: 'project_finance_screen',
+      );
     } catch (error) {
       if (!mounted) {
         return;
@@ -45,6 +50,11 @@ class _AdminProjectFinanceScreenState extends State<AdminProjectFinanceScreen> {
         _errorText = error.toString();
         _loadingSnapshot = false;
       });
+      EcosystemHealthService.instance.reportFailure(
+        pointId: 'V4-PROJECT-ROI',
+        error: error,
+        source: 'project_finance_screen',
+      );
     }
   }
 

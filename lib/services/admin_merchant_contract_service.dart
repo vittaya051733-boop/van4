@@ -1,6 +1,8 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 
+import '../utils/guarded_functions.dart';
+
 class AdminMerchantWalletSnapshot {
   const AdminMerchantWalletSnapshot({
     required this.totalCredit,
@@ -51,9 +53,6 @@ class AdminMerchantContractService {
 
   static const _walletCollection = 'merchant_wallets';
 
-  FirebaseFunctions get _functions =>
-      FirebaseFunctions.instanceFor(region: 'asia-southeast1');
-
   Stream<AdminMerchantWalletSnapshot?> watchMerchantWallet(String merchantUid) {
     final trimmedUid = merchantUid.trim();
     if (trimmedUid.isEmpty) {
@@ -80,8 +79,9 @@ class AdminMerchantContractService {
       throw StateError('merchantUid is required');
     }
 
-    final result = await _functions.httpsCallable('getMerchantWallet').call(
-      <String, dynamic>{'merchantUid': trimmedUid},
+    final result = await GuardedFunctions.call(
+      'getMerchantWallet',
+      parameters: <String, dynamic>{'merchantUid': trimmedUid},
     );
     final data = result.data is Map
         ? Map<String, dynamic>.from(result.data as Map)
@@ -98,9 +98,9 @@ class AdminMerchantContractService {
       throw StateError('merchantUid is required');
     }
 
-    final result =
-        await _functions.httpsCallable('adminCancelMerchantContract').call(
-      <String, dynamic>{
+    final result = await GuardedFunctions.call(
+      'adminCancelMerchantContract',
+      parameters: <String, dynamic>{
         'merchantUid': trimmedUid,
         'reason': reason.trim(),
       },

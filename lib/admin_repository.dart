@@ -7,9 +7,11 @@ import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/foundation.dart';
 
 import 'data/catalog_taxonomy.dart';
+import 'models/admin_claim_request.dart';
 import 'models/home_page_lock_config.dart';
 import 'models/home_quick_action_config.dart';
 import 'models/home_shelves_config.dart';
+import 'utils/guarded_functions.dart';
 
 class AdminAccessCheck {
   const AdminAccessCheck({
@@ -213,6 +215,96 @@ class AdminRepository {
         .get();
 
     return snapshot.docs.map(AdminOrderRecord.fromSnapshot).toList(growable: false);
+  }
+
+  static Future<AdminOrderRecord?> fetchOrderById(String orderId) async {
+    final trimmed = orderId.trim();
+    if (trimmed.isEmpty) {
+      return null;
+    }
+    final snapshot = await _firestore.collection('orders').doc(trimmed).get();
+    if (!snapshot.exists) {
+      return null;
+    }
+    return AdminOrderRecord.fromSnapshot(snapshot);
+  }
+
+  static Future<AdminCustomerRecord?> fetchCustomerByUid(String uid) async {
+    final trimmed = uid.trim();
+    if (trimmed.isEmpty) {
+      return null;
+    }
+    final snapshot =
+        await _firestore.collection('customer_users').doc(trimmed).get();
+    if (!snapshot.exists) {
+      return null;
+    }
+    final data = snapshot.data();
+    if (data == null) {
+      return null;
+    }
+    return AdminCustomerRecord(
+      id: snapshot.id,
+      displayName:
+          _firstString(data, const <String>['displayName', 'name']) ?? 'ลูกค้า',
+      phone: _firstString(data, const <String>['phoneNumber', 'phone']),
+      email: _firstString(data, const <String>['email', 'loginEmail']),
+      createdAt: _toDateTime(data['createdAt']),
+    );
+  }
+
+  static Future<AdminMerchantRecord?> fetchMerchantByUid(String uid) async {
+    final trimmed = uid.trim();
+    if (trimmed.isEmpty) {
+      return null;
+    }
+    final snapshot = await _firestore.collection('users').doc(trimmed).get();
+    if (!snapshot.exists) {
+      return null;
+    }
+    final data = snapshot.data();
+    if (data == null) {
+      return null;
+    }
+    final role = _firstString(data, const <String>['role']) ?? 'merchant';
+    return AdminMerchantRecord(
+      id: snapshot.id,
+      displayName:
+          _firstString(data, const <String>['displayName', 'name']) ?? 'ร้านค้า',
+      phone: _firstString(data, const <String>['phoneNumber', 'phone']),
+      email: _firstString(data, const <String>['email', 'loginEmail']),
+      role: role,
+      createdAt: _toDateTime(data['createdAt']) ?? _toDateTime(data['updatedAt']),
+      isAdmin: data['isAdmin'] == true,
+    );
+  }
+
+  static Future<Map<String, dynamic>> adminResolveClaim({
+    required String originalOrderId,
+    required String kind,
+    required String reason,
+    required List<Map<String, dynamic>> items,
+    bool platformPaysShop = false,
+    double? creditAmount,
+    double? shopPayoutAmount,
+  }) async {
+    final result = await GuardedFunctions.call(
+      'adminResolveClaim',
+      parameters: <String, dynamic>{
+        'originalOrderId': originalOrderId,
+        'kind': kind,
+        'reason': reason,
+        'items': items,
+        'platformPaysShop': platformPaysShop,
+        if (creditAmount != null) 'creditAmount': creditAmount,
+        if (shopPayoutAmount != null) 'shopPayoutAmount': shopPayoutAmount,
+      },
+    );
+    final data = result.data;
+    if (data is Map) {
+      return Map<String, dynamic>.from(data);
+    }
+    return <String, dynamic>{};
   }
 
   static Future<void> approveShop({
@@ -1727,22 +1819,28 @@ class AdminOrderLineItem {
     required this.lineTotal,
     required this.imageUrl,
     required this.note,
+    this.productId,
+    this.merchantUnitPayout,
   });
 
+  final String? productId;
   final String name;
   final int quantity;
   final double? unitPrice;
+  final double? merchantUnitPayout;
   final double? lineTotal;
   final String? imageUrl;
   final String? note;
 
   factory AdminOrderLineItem.fromMap(Map<dynamic, dynamic> raw) {
     return AdminOrderLineItem(
+      productId: _firstString(raw, const <String>['productId']),
       name: _firstString(raw, const <String>['name', 'productName', 'title']) ?? 'สินค้า',
       quantity: _toInt(raw['quantity']) ?? 1,
       unitPrice: _toDouble(raw['unitPrice'] ?? raw['price']),
+      merchantUnitPayout: _toDouble(raw['merchantUnitPayout']),
       lineTotal: _toDouble(raw['lineTotal'] ?? raw['total']),
-      imageUrl: _firstString(raw, const <String>['imageUrl', 'photoUrl', 'productImage']),
+      imageUrl: _firstImageUrl(raw),
       note: _firstString(raw, const <String>['note', 'notes']),
     );
   }
@@ -1779,6 +1877,12 @@ class AdminOrderRecord {
     required this.shopImageUrl,
     required this.items,
     required this.rawData,
+    this.orderType,
+    this.originOrderId,
+    this.claimId,
+    this.claimStatus,
+    this.replacementOrderId,
+    this.claimCreditCouponId,
   });
 
   final String id;
@@ -1810,6 +1914,20 @@ class AdminOrderRecord {
   final String? shopImageUrl;
   final List<AdminOrderLineItem> items;
   final Map<String, dynamic> rawData;
+  final String? orderType;
+  final String? originOrderId;
+  final String? claimId;
+  final String? claimStatus;
+  final String? replacementOrderId;
+  final String? claimCreditCouponId;
+
+  bool get isClaimReplacement =>
+      (orderType ?? '').trim() == 'claim_replacement';
+
+  bool get hasResolvedClaim {
+    final status = (claimStatus ?? '').trim().toLowerCase();
+    return status == 'replaced' || status == 'credited';
+  }
 
   String get displayOrderNumber {
     final code = orderCode?.trim();
@@ -1838,8 +1956,8 @@ class AdminOrderRecord {
   String get van2Label => customerId ?? customerName ?? '-';
   String get van3Label => driverId ?? driverName ?? 'ยังไม่มีไรเดอร์';
 
-  factory AdminOrderRecord.fromSnapshot(QueryDocumentSnapshot<Map<String, dynamic>> doc) {
-    final data = doc.data();
+  factory AdminOrderRecord.fromSnapshot(DocumentSnapshot<Map<String, dynamic>> doc) {
+    final data = doc.data() ?? <String, dynamic>{};
     return AdminOrderRecord(
       id: doc.id,
       orderCode: _firstString(data, const <String>['orderCode']),
@@ -1873,6 +1991,12 @@ class AdminOrderRecord {
       shopImageUrl: _firstString(data, const <String>['shopImageUrl']),
       items: _parseOrderItems(data),
       rawData: Map<String, dynamic>.from(data),
+      orderType: _firstString(data, const <String>['orderType']),
+      originOrderId: _firstString(data, const <String>['originOrderId']),
+      claimId: _firstString(data, const <String>['claimId']),
+      claimStatus: _firstString(data, const <String>['claimStatus']),
+      replacementOrderId: _firstString(data, const <String>['replacementOrderId']),
+      claimCreditCouponId: _firstString(data, const <String>['claimCreditCouponId']),
     );
   }
 }
@@ -1911,6 +2035,27 @@ String? _firstString(Map<dynamic, dynamic> data, List<String> keys) {
         return trimmed;
       }
     }
+  }
+  return null;
+}
+
+String? _firstImageUrl(Map<dynamic, dynamic> raw) {
+  final direct = _firstString(raw, const <String>[
+    'imageUrl',
+    'photoUrl',
+    'productImage',
+    'thumbnailUrl',
+  ]);
+  if (direct != null) {
+    return direct;
+  }
+  final fromOriginals = _readStringList(raw['imageUrls']);
+  if (fromOriginals.isNotEmpty) {
+    return fromOriginals.first;
+  }
+  final fromThumbs = _readStringList(raw['thumbnailUrls']);
+  if (fromThumbs.isNotEmpty) {
+    return fromThumbs.first;
   }
   return null;
 }
@@ -1972,6 +2117,8 @@ class AdminSupportTicket {
     this.requesterPhone,
     this.lastMessagePreview,
     this.contactClosed = false,
+    this.orderId,
+    this.claimRequest,
   });
 
   factory AdminSupportTicket.fromDoc(
@@ -2001,6 +2148,8 @@ class AdminSupportTicket {
       requesterPhone: (data['requesterPhone'] as String?)?.trim(),
       lastMessagePreview: (data['lastMessagePreview'] as String?)?.trim(),
       contactClosed: data['contactClosed'] == true || data['status'] == 'closed',
+      orderId: (data['orderId'] as String?)?.trim(),
+      claimRequest: AdminClaimRequest.fromMap(data['claimRequest']),
     );
   }
 
@@ -2022,6 +2171,14 @@ class AdminSupportTicket {
   final String? requesterPhone;
   final String? lastMessagePreview;
   final bool contactClosed;
+  final String? orderId;
+  final AdminClaimRequest? claimRequest;
+
+  bool get isProductClaimTicket =>
+      topicKey == AdminClaimRequest.topicKey || claimRequest != null;
+
+  bool get hasPendingClaimRequest =>
+      claimRequest?.isPending ?? (topicKey == AdminClaimRequest.topicKey && status != 'closed');
 
   bool get isOpen => status == 'open';
   bool get isContactClosed => contactClosed || status == 'closed';
@@ -2205,6 +2362,78 @@ extension AdminRepositorySupport on AdminRepository {
       'status': status,
       'updatedAt': FieldValue.serverTimestamp(),
     });
+  }
+
+  static Future<AdminSupportTicket?> findOpenClaimTicketForOrder(
+    String orderId,
+  ) async {
+    final trimmed = orderId.trim();
+    if (trimmed.isEmpty) {
+      return null;
+    }
+    final snapshot = await FirebaseFirestore.instance
+        .collection('admin_support_tickets')
+        .where('orderId', isEqualTo: trimmed)
+        .where('topicKey', isEqualTo: AdminClaimRequest.topicKey)
+        .limit(10)
+        .get();
+    for (final doc in snapshot.docs) {
+      final ticket = AdminSupportTicket.fromDoc(doc);
+      if (ticket.isContactClosed) {
+        continue;
+      }
+      if (ticket.hasPendingClaimRequest) {
+        return ticket;
+      }
+    }
+    return null;
+  }
+
+  static Future<void> markClaimTicketResolved({
+    required String ticketId,
+    required String claimId,
+    String? resolutionNote,
+  }) async {
+    final ticketRef = FirebaseFirestore.instance
+        .collection('admin_support_tickets')
+        .doc(ticketId);
+    final snap = await ticketRef.get();
+    if (!snap.exists) {
+      return;
+    }
+    final ticket = AdminSupportTicket.fromDoc(snap);
+    final claimRequest = ticket.claimRequest;
+    final claimRequestMap = <String, dynamic>{
+      'items': (claimRequest?.items ?? const <AdminClaimRequestItem>[])
+          .map(
+            (item) => <String, dynamic>{
+              'productId': item.productId,
+              'name': item.name,
+              'quantity': item.quantity,
+              if (item.unitPrice != null) 'unitPrice': item.unitPrice,
+              if (item.imageUrl != null) 'imageUrl': item.imageUrl,
+            },
+          )
+          .toList(growable: false),
+      'reason': claimRequest?.reason ?? 'other',
+      'status': 'resolved',
+      'claimId': claimId,
+    };
+
+    await ticketRef.update(<String, dynamic>{
+      'claimRequest': claimRequestMap,
+      'status': 'resolved',
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
+
+    final note = resolutionNote?.trim();
+    if (note != null && note.isNotEmpty) {
+      await replyToSupportTicket(
+        ticket: ticket,
+        message: note,
+        adminName: 'แอดมิน',
+      );
+    }
   }
 
   static Stream<List<AdminSupportMessage>> streamSupportMessages(

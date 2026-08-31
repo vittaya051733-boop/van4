@@ -1,4 +1,6 @@
 import 'package:cloud_functions/cloud_functions.dart';
+
+import '../utils/app_check_guard.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
 
@@ -16,6 +18,7 @@ class AdminCallService {
     required AdminPeerProfile caller,
     required AdminPeerProfile callee,
   }) async {
+    await AppCheckGuard.ensureCallableReady();
     FirebaseFunctionsException? lastError;
 
     for (final region in _regions) {

@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import 'admin_internal_chat_repository.dart';
 import 'admin_internal_thread_screen.dart';
 import 'models/admin_peer_profile.dart';
+import 'services/admin_firestore.dart';
+import 'services/ecosystem_health_service.dart';
 
 class AdminInternalChatHubScreen extends StatefulWidget {
   const AdminInternalChatHubScreen({
@@ -18,38 +20,87 @@ class AdminInternalChatHubScreen extends StatefulWidget {
 }
 
 class _AdminInternalChatHubScreenState extends State<AdminInternalChatHubScreen> {
-  @override
-  void initState() {
-    super.initState();
-    AdminInternalChatRepository.ensureTeamThread();
-  }
+  bool _openingTeam = false;
+  bool _openingDm = false;
+  int _directoryReloadToken = 0;
 
   Future<void> _openTeamThread() async {
-    final threadId = await AdminInternalChatRepository.ensureTeamThread();
-    if (!mounted) return;
-    await Navigator.of(context).push<void>(
-      MaterialPageRoute<void>(
-        builder: (_) => AdminInternalThreadScreen(
-          threadId: threadId,
-          title: 'ห้องทีมแอดมิน',
-          isTeam: true,
+    if (_openingTeam) {
+      return;
+    }
+    setState(() => _openingTeam = true);
+    try {
+      final threadId = await AdminInternalChatRepository.ensureTeamThread();
+      EcosystemHealthService.instance.reportOk(
+        pointId: 'V4-CHAT',
+        source: 'admin_chat_hub',
+      );
+      if (!mounted) {
+        return;
+      }
+      await Navigator.of(context).push<void>(
+        MaterialPageRoute<void>(
+          builder: (_) => AdminInternalThreadScreen(
+            threadId: threadId,
+            title: 'ห้องทีมแอดมิน',
+            isTeam: true,
+          ),
         ),
-      ),
-    );
+      );
+    } catch (error) {
+      EcosystemHealthService.instance.reportFailure(
+        pointId: 'V4-CHAT',
+        error: error,
+        source: 'admin_chat_hub',
+      );
+      if (mounted) {
+        _showError(AdminFirestore.userMessage(error, fallback: 'เปิดห้องทีมไม่สำเร็จ'));
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _openingTeam = false);
+      }
+    }
   }
 
   Future<void> _openDm(AdminPeerProfile peer) async {
-    final threadId = await AdminInternalChatRepository.ensureDmThread(peer);
-    if (!mounted) return;
-    await Navigator.of(context).push<void>(
-      MaterialPageRoute<void>(
-        builder: (_) => AdminInternalThreadScreen(
-          threadId: threadId,
-          title: peer.displayName,
-          peer: peer,
+    if (_openingDm) {
+      return;
+    }
+    setState(() => _openingDm = true);
+    try {
+      final threadId = await AdminInternalChatRepository.ensureDmThread(peer);
+      if (!mounted) {
+        return;
+      }
+      await Navigator.of(context).push<void>(
+        MaterialPageRoute<void>(
+          builder: (_) => AdminInternalThreadScreen(
+            threadId: threadId,
+            title: peer.displayName,
+            peer: peer,
+          ),
         ),
-      ),
+      );
+    } catch (error) {
+      if (mounted) {
+        _showError(AdminFirestore.userMessage(error, fallback: 'เปิดแชทไม่สำเร็จ'));
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _openingDm = false);
+      }
+    }
+  }
+
+  void _showError(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message), behavior: SnackBarBehavior.floating),
     );
+  }
+
+  void _reloadDirectory() {
+    setState(() => _directoryReloadToken += 1);
   }
 
   @override
@@ -64,7 +115,7 @@ class _AdminInternalChatHubScreenState extends State<AdminInternalChatHubScreen>
             borderRadius: BorderRadius.circular(16),
             clipBehavior: Clip.antiAlias,
             child: InkWell(
-              onTap: _openTeamThread,
+              onTap: _openingTeam ? null : _openTeamThread,
               child: Padding(
                 padding: const EdgeInsets.all(14),
                 child: Row(
@@ -82,20 +133,29 @@ class _AdminInternalChatHubScreenState extends State<AdminInternalChatHubScreen>
                     Expanded(
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
-                        children: const <Widget>[
-                          Text(
+                        children: <Widget>[
+                          const Text(
                             'ห้องทีมแอดมิน',
                             style: TextStyle(fontWeight: FontWeight.w800, fontSize: 15),
                           ),
-                          SizedBox(height: 4),
+                          const SizedBox(height: 4),
                           Text(
-                            'แชทรวมทุกแอดมิน • ส่งรูปและไฟล์ได้',
-                            style: TextStyle(color: Color(0xFF6B7280), fontSize: 13),
+                            _openingTeam
+                                ? 'กำลังเปิดห้อง...'
+                                : 'แชทรวมทุกแอดมิน • ส่งรูปและไฟล์ได้',
+                            style: const TextStyle(color: Color(0xFF6B7280), fontSize: 13),
                           ),
                         ],
                       ),
                     ),
-                    const Icon(Icons.chevron_right_rounded, color: Color(0xFFE65100)),
+                    if (_openingTeam)
+                      const SizedBox(
+                        width: 22,
+                        height: 22,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    else
+                      const Icon(Icons.chevron_right_rounded, color: Color(0xFFE65100)),
                   ],
                 ),
               ),
@@ -114,6 +174,7 @@ class _AdminInternalChatHubScreenState extends State<AdminInternalChatHubScreen>
         ),
         Expanded(
           child: StreamBuilder<List<AdminDirectoryEntry>>(
+            key: ValueKey<int>(_directoryReloadToken),
             stream: AdminInternalChatRepository.streamAdminDirectory(),
             builder: (context, snapshot) {
               if (snapshot.connectionState == ConnectionState.waiting &&
@@ -121,7 +182,32 @@ class _AdminInternalChatHubScreenState extends State<AdminInternalChatHubScreen>
                 return const Center(child: CircularProgressIndicator());
               }
               if (snapshot.hasError) {
-                return Center(child: Text('โหลดรายชื่อแอดมินไม่สำเร็จ\n${snapshot.error}'));
+                return Center(
+                  child: Padding(
+                    padding: const EdgeInsets.all(24),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: <Widget>[
+                        const Icon(Icons.cloud_off_outlined, size: 40, color: Color(0xFFB45309)),
+                        const SizedBox(height: 12),
+                        Text(
+                          AdminFirestore.userMessage(
+                            snapshot.error!,
+                            fallback: 'โหลดรายชื่อแอดมินไม่สำเร็จ',
+                          ),
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(color: Color(0xFFB45309)),
+                        ),
+                        const SizedBox(height: 12),
+                        OutlinedButton.icon(
+                          onPressed: _reloadDirectory,
+                          icon: const Icon(Icons.refresh),
+                          label: const Text('ลองใหม่'),
+                        ),
+                      ],
+                    ),
+                  ),
+                );
               }
 
               final admins = snapshot.data ?? const <AdminDirectoryEntry>[];
@@ -145,7 +231,7 @@ class _AdminInternalChatHubScreenState extends State<AdminInternalChatHubScreen>
                 itemBuilder: (context, index) {
                   final admin = admins[index];
                   final peer = admin.toPeerProfile();
-                  final disabled = peer == null;
+                  final disabled = peer == null || _openingDm;
                   return Material(
                     color: Colors.white,
                     borderRadius: BorderRadius.circular(14),
@@ -178,11 +264,11 @@ class _AdminInternalChatHubScreenState extends State<AdminInternalChatHubScreen>
                                     ),
                                   ),
                                   Text(
-                                    disabled
+                                    disabled && peer == null
                                         ? 'ยังไม่เคยล็อกอิน van4'
                                         : admin.email,
                                     style: TextStyle(
-                                      color: disabled
+                                      color: peer == null
                                           ? const Color(0xFFB45309)
                                           : const Color(0xFF6B7280),
                                       fontSize: 13,
@@ -191,10 +277,16 @@ class _AdminInternalChatHubScreenState extends State<AdminInternalChatHubScreen>
                                 ],
                               ),
                             ),
-                            if (!disabled)
+                            if (peer != null && !_openingDm)
                               const Icon(Icons.chat_bubble_outline, color: Color(0xFFE65100))
+                            else if (peer == null)
+                              const Icon(Icons.schedule, color: Color(0xFF9CA3AF))
                             else
-                              const Icon(Icons.schedule, color: Color(0xFF9CA3AF)),
+                              const SizedBox(
+                                width: 18,
+                                height: 18,
+                                child: CircularProgressIndicator(strokeWidth: 2),
+                              ),
                           ],
                         ),
                       ),

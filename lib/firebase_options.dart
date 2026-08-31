@@ -17,9 +17,9 @@ class DefaultFirebaseOptions {
       case TargetPlatform.macOS:
         return ios;
       case TargetPlatform.windows:
-        return android;
+        return desktop;
       case TargetPlatform.linux:
-        return android;
+        return desktop;
       default:
         throw UnsupportedError(
           'DefaultFirebaseOptions are not supported for this platform.',
@@ -35,6 +35,16 @@ class DefaultFirebaseOptions {
     authDomain: 'van-merchant.firebaseapp.com',
     storageBucket: 'van-merchant-van4-storage-802503541368',
     measurementId: 'G-WNMT2HGLVF',
+  );
+
+  /// Desktop — native SDK ต้องมี authDomain; ใช้ Android API key (web key ถูกจำกัด referrer)
+  static const FirebaseOptions desktop = FirebaseOptions(
+    apiKey: 'AIzaSyAW7bXQ8cCwFYAhTigB9YJDQQZkZsF2eNc',
+    appId: '1:802503541368:android:bddc4d7775d9f43cf6a38d',
+    messagingSenderId: '802503541368',
+    projectId: 'van-merchant',
+    authDomain: 'van-merchant.firebaseapp.com',
+    storageBucket: 'van-merchant-van4-storage-802503541368',
   );
 
   /// van4.com — from android/app/google-services.json

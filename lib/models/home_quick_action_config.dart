@@ -12,9 +12,6 @@ class HomeQuickActionSpec {
   final bool hidesHomeProducts;
 
   String get adminSubtitle {
-    if (id == 'nationwide-shipping') {
-      return 'ปิดแล้วไม่แสดงปุ่ม และไม่แสดงสินค้าส่งทั่วประเทศบนหน้าแรก van2';
-    }
     if (hidesHomeProducts) {
       return 'ปิดแล้วไม่แสดงปุ่ม และไม่แสดงสินค้าหมวดนี้บนหน้าแรก van2';
     }
@@ -55,7 +52,6 @@ class HomeQuickActionConfig {
     HomeQuickActionSpec(
       id: 'nationwide-shipping',
       labelTh: 'สินค้าส่งทั่วประเทศ',
-      hidesHomeProducts: true,
     ),
     HomeQuickActionSpec(id: 'more', labelTh: 'เพิ่มเติม'),
   ];

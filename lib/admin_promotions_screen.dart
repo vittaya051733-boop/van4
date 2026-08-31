@@ -1,9 +1,12 @@
+import 'dart:async';
+import 'dart:io';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
-import 'dart:io';
 
 import 'admin_repository.dart';
+import 'widgets/admin_coupon_target_picker.dart';
 
 class AdminPromotionsScreen extends StatefulWidget {
   const AdminPromotionsScreen({super.key});
@@ -78,8 +81,33 @@ class _OfferListTab extends StatelessWidget {
             FilledButton.icon(
               onPressed: () => _openEditor(context),
               icon: const Icon(Icons.add_rounded),
-              label: Text(isCoupon ? 'เพิ่มคูปอง' : 'เพิ่มโปร'),
+              label: Text(isCoupon ? 'เพิ่มคูปองโค้ด' : 'เพิ่มโปร'),
             ),
+            if (isCoupon) ...<Widget>[
+              const SizedBox(height: 8),
+              FilledButton.tonalIcon(
+                onPressed: () => _openEditor(
+                  context,
+                  initialDistribution: 'self_claim',
+                ),
+                icon: const Icon(Icons.redeem_outlined),
+                label: const Text('สร้างคูปองกดรับเอง (หน้าแรก van2)'),
+              ),
+              const SizedBox(height: 8),
+              const Card(
+                color: Color(0xFFFFF7ED),
+                child: Padding(
+                  padding: EdgeInsets.all(12),
+                  child: Text(
+                    'คูปองกดรับเอง = ลูกค้ากดรับบนหน้าแรก van2\n'
+                    '• ป๊อปอัพ PNG โปร่งใส + ปุ่ม ✕ มุมขวา\n'
+                    '• แถบคูปองบนหน้าแรก\n'
+                    '• กำหนดวันหมดอายุ จำนวนที่แจก และเลือกร้าน/สินค้าได้',
+                    style: TextStyle(color: Color(0xFF9A3412), height: 1.45, fontSize: 13),
+                  ),
+                ),
+              ),
+            ],
             const SizedBox(height: 12),
             if (docs.isEmpty)
               const Text(
@@ -101,6 +129,7 @@ class _OfferListTab extends StatelessWidget {
   Future<void> _openEditor(
     BuildContext context, {
     QueryDocumentSnapshot<Map<String, dynamic>>? doc,
+    String? initialDistribution,
   }) async {
     await Navigator.of(context).push<void>(
       MaterialPageRoute<void>(
@@ -108,6 +137,7 @@ class _OfferListTab extends StatelessWidget {
           collection: collection,
           isCoupon: isCoupon,
           doc: doc,
+          initialDistribution: initialDistribution,
         ),
       ),
     );
@@ -160,6 +190,8 @@ class _OfferCard extends StatelessWidget {
           [
             if (code.isNotEmpty) 'โค้ด: $code',
             if (isCoupon && distribution == 'self_claim') 'กดรับเอง',
+            if (isCoupon && distribution == 'self_claim' && display['transparentImage'] == true)
+              'PNG โปร่งใส',
             if (isCoupon && distribution == 'self_claim')
               'รับแล้ว ${maxClaimsTotal > 0 ? '$claimCount/$maxClaimsTotal' : '$claimCount'}',
             if (isCoupon && display['presentation'] != null)
@@ -194,11 +226,13 @@ class _OfferEditorScreen extends StatefulWidget {
     required this.collection,
     required this.isCoupon,
     this.doc,
+    this.initialDistribution,
   });
 
   final String collection;
   final bool isCoupon;
   final QueryDocumentSnapshot<Map<String, dynamic>>? doc;
+  final String? initialDistribution;
 
   @override
   State<_OfferEditorScreen> createState() => _OfferEditorScreenState();
@@ -229,7 +263,10 @@ class _OfferEditorScreenState extends State<_OfferEditorScreen> {
   String _applyTo = 'subtotal';
   String _geoType = 'none';
   String _distribution = 'manual_code';
-  String _presentation = 'inline';
+  String _presentation = 'both';
+  bool _transparentImage = true;
+  List<String> _selectedShopOwnerIds = <String>[];
+  List<String> _selectedProductIds = <String>[];
   DateTime? _startAt;
   DateTime? _endAt;
   String _imageUrl = '';
@@ -294,12 +331,18 @@ class _OfferEditorScreenState extends State<_OfferEditorScreen> {
     _applyTo = (discount['applyTo'] ?? 'subtotal').toString();
     _geoType = (geo['type'] ?? 'none').toString();
     _distribution = widget.isCoupon
-        ? (data['distribution'] ?? 'manual_code').toString()
+        ? (data['distribution'] ?? widget.initialDistribution ?? 'manual_code').toString()
         : 'manual_code';
-    _presentation = (display['presentation'] ?? 'inline').toString();
+    _presentation = (display['presentation'] ?? (widget.initialDistribution == 'self_claim' ? 'both' : 'inline')).toString();
+    _transparentImage = display['transparentImage'] != false;
     _imageUrl = (display['imageUrl'] ?? '').toString();
+    _selectedProductIds = _splitIds(conditions['productIds'] is List ? (conditions['productIds'] as List).join(', ') : _productIdsController.text);
+    _selectedShopOwnerIds = _splitIds(conditions['shopIds'] is List ? (conditions['shopIds'] as List).join(', ') : _shopIdsController.text);
     _startAt = _parseDateTime(conditions['startAt']);
-    _endAt = _parseDateTime(conditions['endAt']);
+    _endAt = _parseDateTime(conditions['endAt']) ??
+        (widget.doc == null && widget.initialDistribution == 'self_claim'
+            ? DateTime.now().add(const Duration(days: 7))
+            : null);
   }
 
   DateTime? _parseDateTime(dynamic value) {
@@ -372,6 +415,7 @@ class _OfferEditorScreenState extends State<_OfferEditorScreen> {
         if (_imageUrl.isNotEmpty) 'imageUrl': _imageUrl,
         if (widget.isCoupon && _distribution == 'self_claim') ...<String, dynamic>{
           'presentation': _presentation,
+          'transparentImage': _transparentImage,
           'popupTitle': _popupTitleController.text.trim().isEmpty
               ? _nameController.text.trim()
               : _popupTitleController.text.trim(),
@@ -393,8 +437,8 @@ class _OfferEditorScreenState extends State<_OfferEditorScreen> {
           'maxClaimsTotal': int.parse(_maxClaimsTotalController.text.trim()),
         if (_startAt != null) 'startAt': Timestamp.fromDate(_startAt!),
         if (_endAt != null) 'endAt': Timestamp.fromDate(_endAt!),
-        'productIds': _splitIds(_productIdsController.text),
-        'shopIds': _splitIds(_shopIdsController.text),
+        'productIds': _selectedProductIds,
+        'shopIds': _selectedShopOwnerIds,
         'geo': <String, dynamic>{'type': _geoType},
       };
 
@@ -590,14 +634,33 @@ class _OfferEditorScreenState extends State<_OfferEditorScreen> {
               ),
             ],
             if (widget.isCoupon && _distribution == 'self_claim') ...<Widget>[
+              const SizedBox(height: 16),
+              const Text(
+                'คูปองกดรับเอง — แสดงบนหน้าแรก van2',
+                style: TextStyle(fontWeight: FontWeight.w800, fontSize: 16),
+              ),
+              const SizedBox(height: 4),
+              const Text(
+                'ลูกค้าเปิดแอปแล้วกดรับได้เอง — เก็บใน "คูปองของฉัน"',
+                style: TextStyle(color: Color(0xFF6B7280), height: 1.4),
+              ),
               const SizedBox(height: 12),
               DropdownButtonFormField<String>(
                 value: _presentation,
-                decoration: const InputDecoration(labelText: 'รูปแบบแสดงบน van2'),
+                decoration: const InputDecoration(labelText: 'แสดงที่ไหน'),
                 items: const <DropdownMenuItem<String>>[
-                  DropdownMenuItem(value: 'popup', child: Text('ป๊อปอัพ')),
-                  DropdownMenuItem(value: 'inline', child: Text('บนหน้าจอ')),
-                  DropdownMenuItem(value: 'both', child: Text('ทั้งสองแบบ')),
+                  DropdownMenuItem(
+                    value: 'popup',
+                    child: Text('ป๊อปอัพตอนเข้าแอป'),
+                  ),
+                  DropdownMenuItem(
+                    value: 'inline',
+                    child: Text('แถบคูปองบนหน้าแรก'),
+                  ),
+                  DropdownMenuItem(
+                    value: 'both',
+                    child: Text('ทั้งป๊อปอัพ + แถบหน้าแรก'),
+                  ),
                 ],
                 onChanged: (value) {
                   if (value != null) {
@@ -605,9 +668,21 @@ class _OfferEditorScreenState extends State<_OfferEditorScreen> {
                   }
                 },
               ),
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                value: _transparentImage,
+                onChanged: (value) => setState(() => _transparentImage = value),
+                title: const Text('รูป PNG โปร่งใส (ป๊อปอัพ)'),
+                subtitle: const Text(
+                  'แสดงเฉพาะรูป + ปุ่ม ✕ มุมขวา — เหมาะกับโปรโมชันแบบกราฟิก',
+                ),
+              ),
               TextFormField(
                 controller: _popupTitleController,
-                decoration: const InputDecoration(labelText: 'หัวข้อป๊อปอัพ'),
+                decoration: const InputDecoration(
+                  labelText: 'หัวข้อป๊อปอัพ',
+                  helperText: 'ใช้เมื่อไม่ได้เปิดโหมด PNG โปร่งใส',
+                ),
               ),
               TextFormField(
                 controller: _ctaTextController,
@@ -615,12 +690,10 @@ class _OfferEditorScreenState extends State<_OfferEditorScreen> {
               ),
               TextFormField(
                 controller: _maxClaimsTotalController,
-                decoration: const InputDecoration(labelText: 'จำนวนคนรับได้สูงสุด'),
-                keyboardType: TextInputType.number,
-              ),
-              TextFormField(
-                controller: _priorityController,
-                decoration: const InputDecoration(labelText: 'ลำดับความสำคัญ'),
+                decoration: const InputDecoration(
+                  labelText: 'จำนวนคูปองที่แจกได้',
+                  helperText: 'เช่น 500 = แจกได้ 500 ใบ — ว่าง = ไม่จำกัด',
+                ),
                 keyboardType: TextInputType.number,
               ),
               ListTile(
@@ -634,7 +707,7 @@ class _OfferEditorScreenState extends State<_OfferEditorScreen> {
               ),
               ListTile(
                 contentPadding: EdgeInsets.zero,
-                title: const Text('วันสิ้นสุด'),
+                title: const Text('วันหมดอายุ'),
                 subtitle: Text(_formatSchedule(_endAt)),
                 trailing: TextButton(
                   onPressed: () => _pickScheduleDate(isStart: false),
@@ -642,26 +715,62 @@ class _OfferEditorScreenState extends State<_OfferEditorScreen> {
                 ),
               ),
               const SizedBox(height: 8),
+              const Text('จำกัดร้าน / สินค้า', style: TextStyle(fontWeight: FontWeight.w800)),
+              const SizedBox(height: 8),
+              AdminCouponTargetPicker(
+                selectedShopOwnerIds: _selectedShopOwnerIds,
+                selectedProductIds: _selectedProductIds,
+                onChanged: (shops, products) {
+                  setState(() {
+                    _selectedShopOwnerIds = shops;
+                    _selectedProductIds = products;
+                  });
+                },
+              ),
+              const SizedBox(height: 12),
               const Text('รูปคูปอง', style: TextStyle(fontWeight: FontWeight.w800)),
+              const SizedBox(height: 4),
+              const Text(
+                'แนะนำ PNG โปร่งใส สำหรับป๊อปอัพ — อัตราส่วน 4:3 หรือ 16:9',
+                style: TextStyle(color: Color(0xFF6B7280), fontSize: 13),
+              ),
               const SizedBox(height: 8),
               if (_localImagePath != null || _imageUrl.isNotEmpty)
                 ClipRRect(
                   borderRadius: BorderRadius.circular(12),
                   child: AspectRatio(
-                    aspectRatio: 16 / 9,
-                    child: _localImagePath != null
-                        ? Image.file(
-                            File(_localImagePath!),
-                            fit: BoxFit.cover,
+                    aspectRatio: 4 / 3,
+                    child: _transparentImage
+                        ? ColoredBox(
+                            color: const Color(0xFFE5E7EB),
+                            child: _localImagePath != null
+                                ? Image.file(
+                                    File(_localImagePath!),
+                                    fit: BoxFit.contain,
+                                  )
+                                : Image.network(_imageUrl, fit: BoxFit.contain),
                           )
-                        : Image.network(_imageUrl, fit: BoxFit.cover),
+                        : _localImagePath != null
+                            ? Image.file(
+                                File(_localImagePath!),
+                                fit: BoxFit.cover,
+                              )
+                            : Image.network(_imageUrl, fit: BoxFit.cover),
                   ),
                 ),
               const SizedBox(height: 8),
               OutlinedButton.icon(
                 onPressed: _pickCouponImage,
                 icon: const Icon(Icons.image_rounded),
-                label: const Text('เลือกรูป'),
+                label: const Text('เลือกรูป (PNG/JPG)'),
+              ),
+              TextFormField(
+                controller: _priorityController,
+                decoration: const InputDecoration(
+                  labelText: 'ลำดับความสำคัญ',
+                  helperText: 'เลขมาก = แสดงก่อน',
+                ),
+                keyboardType: TextInputType.number,
               ),
             ],
             const SizedBox(height: 12),
@@ -749,18 +858,20 @@ class _OfferEditorScreenState extends State<_OfferEditorScreen> {
             ),
             const Divider(height: 24),
             const Text('เงื่อนไขเพิ่มเติม', style: TextStyle(fontWeight: FontWeight.w800)),
-            TextFormField(
-              controller: _productIdsController,
-              decoration: const InputDecoration(
-                labelText: 'รหัสสินค้า (คั่นด้วย comma)',
+            if (!(widget.isCoupon && _distribution == 'self_claim')) ...<Widget>[
+              TextFormField(
+                controller: _productIdsController,
+                decoration: const InputDecoration(
+                  labelText: 'รหัสสินค้า (คั่นด้วย comma)',
+                ),
               ),
-            ),
-            TextFormField(
-              controller: _shopIdsController,
-              decoration: const InputDecoration(
-                labelText: 'รหัสร้าน (คั่นด้วย comma)',
+              TextFormField(
+                controller: _shopIdsController,
+                decoration: const InputDecoration(
+                  labelText: 'รหัสร้าน (ownerUid, คั่นด้วย comma)',
+                ),
               ),
-            ),
+            ],
             DropdownButtonFormField<String>(
               value: _geoType,
               decoration: const InputDecoration(labelText: 'พื้นที่'),
@@ -808,33 +919,63 @@ class _PromotionDisplayConfigTabState extends State<_PromotionDisplayConfigTab> 
   bool _showCouponField = true;
   bool _homePromoBanner = true;
   bool _productBadge = true;
-  bool _loading = true;
   bool _saving = false;
+  bool _hydratedFromServer = false;
+  bool _userEdited = false;
+  String? _syncError;
+  StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _subscription;
 
   @override
   void initState() {
     super.initState();
-    _load();
+    _startSync();
   }
 
-  Future<void> _load() async {
-    setState(() => _loading = true);
-    try {
-      final snapshot = await FirebaseFirestore.instance
-          .collection(_collection)
-          .doc(_documentId)
-          .get();
-      final data = snapshot.data() ?? const <String, dynamic>{};
-      _cartStyle = (data['cartStyle'] ?? 'expanded').toString();
-      _showAutoPromotionsInCart = data['showAutoPromotionsInCart'] != false;
-      _showCouponField = data['showCouponField'] != false;
-      _homePromoBanner = data['homePromoBanner'] != false;
-      _productBadge = data['productBadge'] != false;
-    } finally {
-      if (mounted) {
-        setState(() => _loading = false);
-      }
-    }
+  @override
+  void dispose() {
+    unawaited(_subscription?.cancel());
+    super.dispose();
+  }
+
+  void _startSync() {
+    unawaited(_subscription?.cancel());
+    _subscription = FirebaseFirestore.instance
+        .collection(_collection)
+        .doc(_documentId)
+        .snapshots()
+        .listen(
+      (snapshot) {
+        if (!mounted) {
+          return;
+        }
+        if (!_userEdited) {
+          _applyRemoteData(snapshot.data());
+        }
+        setState(() {
+          _syncError = null;
+          _hydratedFromServer = true;
+        });
+      },
+      onError: (Object error) {
+        if (!mounted) {
+          return;
+        }
+        setState(() {
+          _syncError =
+              'ซิงค์จาก Firestore ไม่สำเร็จ — ใช้ค่าเริ่มต้นชั่วคราว (บันทึกได้)';
+        });
+        debugPrint('promotion_display_config sync failed: $error');
+      },
+    );
+  }
+
+  void _applyRemoteData(Map<String, dynamic>? data) {
+    final source = data ?? const <String, dynamic>{};
+    _cartStyle = (source['cartStyle'] ?? 'expanded').toString();
+    _showAutoPromotionsInCart = source['showAutoPromotionsInCart'] != false;
+    _showCouponField = source['showCouponField'] != false;
+    _homePromoBanner = source['homePromoBanner'] != false;
+    _productBadge = source['productBadge'] != false;
   }
 
   Future<void> _save() async {
@@ -851,6 +992,13 @@ class _PromotionDisplayConfigTabState extends State<_PromotionDisplayConfigTab> 
         },
         SetOptions(merge: true),
       );
+      if (mounted) {
+        setState(() {
+          _userEdited = false;
+          _syncError = null;
+          _hydratedFromServer = true;
+        });
+      }
       _showSnack('บันทึกรูปแบบ UI แล้ว — van2 อัปเดตทันที');
     } catch (error) {
       _showSnack('บันทึกไม่สำเร็จ: $error');
@@ -861,6 +1009,13 @@ class _PromotionDisplayConfigTabState extends State<_PromotionDisplayConfigTab> 
     }
   }
 
+  void _markEdited(VoidCallback update) {
+    setState(() {
+      update();
+      _userEdited = true;
+    });
+  }
+
   void _showSnack(String message) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text(message), behavior: SnackBarBehavior.floating),
@@ -869,13 +1024,46 @@ class _PromotionDisplayConfigTabState extends State<_PromotionDisplayConfigTab> 
 
   @override
   Widget build(BuildContext context) {
-    if (_loading) {
-      return const Center(child: CircularProgressIndicator());
-    }
-
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 96),
       children: <Widget>[
+        if (_syncError != null)
+          Card(
+            color: const Color(0xFFFFF7ED),
+            margin: const EdgeInsets.only(bottom: 12),
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  const Icon(Icons.cloud_off_outlined, color: Color(0xFFB45309)),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: <Widget>[
+                        Text(
+                          _syncError!,
+                          style: const TextStyle(color: Color(0xFFB45309)),
+                        ),
+                        const SizedBox(height: 8),
+                        OutlinedButton.icon(
+                          onPressed: _startSync,
+                          icon: const Icon(Icons.refresh),
+                          label: const Text('ลองซิงค์ใหม่'),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          )
+        else if (!_hydratedFromServer)
+          const Padding(
+            padding: EdgeInsets.only(bottom: 12),
+            child: LinearProgressIndicator(minHeight: 2),
+          ),
         const Text(
           'เลือกรูปแบบการแสดงโปร/คูปองบนแอปลูกค้า van2',
           style: TextStyle(color: Color(0xFF6B7280), height: 1.45),
@@ -900,28 +1088,29 @@ class _PromotionDisplayConfigTabState extends State<_PromotionDisplayConfigTab> 
           ],
           onChanged: (value) {
             if (value != null) {
-              setState(() => _cartStyle = value);
+              _markEdited(() => _cartStyle = value);
             }
           },
         ),
         SwitchListTile(
           value: _showAutoPromotionsInCart,
-          onChanged: (value) => setState(() => _showAutoPromotionsInCart = value),
+          onChanged: (value) =>
+              _markEdited(() => _showAutoPromotionsInCart = value),
           title: const Text('แสดงโปรอัตโนมัติในตะกร้า'),
         ),
         SwitchListTile(
           value: _showCouponField,
-          onChanged: (value) => setState(() => _showCouponField = value),
+          onChanged: (value) => _markEdited(() => _showCouponField = value),
           title: const Text('แสดงช่องกรอกคูปอง'),
         ),
         SwitchListTile(
           value: _homePromoBanner,
-          onChanged: (value) => setState(() => _homePromoBanner = value),
+          onChanged: (value) => _markEdited(() => _homePromoBanner = value),
           title: const Text('แบนเนอร์โปรหน้าแรก'),
         ),
         SwitchListTile(
           value: _productBadge,
-          onChanged: (value) => setState(() => _productBadge = value),
+          onChanged: (value) => _markEdited(() => _productBadge = value),
           title: const Text('ป้ายลดบนการ์ดสินค้า'),
         ),
         const SizedBox(height: 16),

@@ -1,0 +1,39 @@
+---
+description: ก่อนแก้ Firebase — จำแนก SHARED/SELF/CROSS-WRITE (van1–4)
+alwaysApply: true
+---
+
+# Van Ecosystem — Change Gate (บังคับก่อนแก้ Firebase)
+
+อ่าน: `..\van2\scripts\DEPLOY_RISK_MATRIX.md` + `..\van2\scripts\VAN_ECOSYSTEM_CROSS_WRITE.md`
+
+## 3 คำถาม (ตอบในใจหรือสรุปให้ user ก่อนแก้)
+
+1. **SHARED / SELF / CROSS-WRITE?**
+   - **SHARED** — rules, Auth, App Check → deploy **van2** + smoke **van3**
+   - **SELF** — storage/hosting, DB `van4` แยก
+   - **CROSS-WRITE** — van4 admin **เขียน** → van2/van1/van3 **อ่าน** (ดูตารางใน `VAN_ECOSYSTEM_CROSS_WRITE.md`)
+
+2. **van4 admin เขียน collection ไหน → ใครอ่าน?**
+
+   | van4 เขียน | ต้องเทส |
+   |------------|---------|
+   | `coupons`, `promotions`, `pricing_config`, `promotion_display_config` | **van2** หน้าแรก/ตะกร้า |
+   | `platform_catalog/home_shelves` | **van2** หน้าแรก |
+   | `products`, `public_shops` | **van2** catalog + **van1** |
+   | `orders`, settlement fields | **van1** + **van3** wallet |
+   | `app_notifications` | **van1 + van2 + van3** inbox |
+
+3. **Field ใหม่:** consumer ต้องมี default — ห้าม rename/ลบ field จน consumer deploy แล้ว
+
+## ห้าม (van4)
+
+- Deploy Firestore `(default)` — ใช้ van2
+- เขียน schema ใหม่โดยไม่อัปเดต `VAN_ECOSYSTEM_CROSS_WRITE.md`
+
+## Deploy ที่ถูก (van4)
+
+```powershell
+..\van2\scripts\deploy-self.ps1 -App van4 -Target storage -ConfirmDeploy "APPROVE:van4:van-merchant" -FinalAcknowledge "YES I UNDERSTAND"
+..\van2\scripts\deploy-self.ps1 -App van4 -Target firestore-van4 -ConfirmDeploy "APPROVE:van4:van-merchant" -FinalAcknowledge "YES I UNDERSTAND"
+```

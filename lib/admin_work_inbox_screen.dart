@@ -10,6 +10,7 @@ import 'admin_support_screens.dart';
 enum _WorkInboxFilter {
   all,
   productReview,
+  productClaim,
   customer,
   merchant,
   rider,
@@ -19,30 +20,85 @@ class AdminWorkInboxScreen extends StatefulWidget {
   const AdminWorkInboxScreen({
     super.key,
     this.embedded = false,
+    this.openChatTab = false,
   });
 
   final bool embedded;
+  final bool openChatTab;
 
   @override
   State<AdminWorkInboxScreen> createState() => _AdminWorkInboxScreenState();
 }
 
-class _AdminWorkInboxScreenState extends State<AdminWorkInboxScreen> {
+class _AdminWorkInboxScreenState extends State<AdminWorkInboxScreen>
+    with SingleTickerProviderStateMixin {
   _WorkInboxFilter _filter = _WorkInboxFilter.all;
   final Set<String> _processingReviewIds = <String>{};
+  late final TabController _inboxTabController;
+  bool _chatTabReady = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _inboxTabController = TabController(length: 2, vsync: this);
+    _inboxTabController.addListener(_handleInboxTabChanged);
+    if (widget.openChatTab) {
+      _activateChatTab();
+    }
+  }
+
+  @override
+  void didUpdateWidget(covariant AdminWorkInboxScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.openChatTab && !oldWidget.openChatTab) {
+      _activateChatTab();
+    }
+  }
+
+  void _activateChatTab() {
+    if (_inboxTabController.index != 1) {
+      _inboxTabController.animateTo(1);
+    }
+    if (!_chatTabReady) {
+      setState(() => _chatTabReady = true);
+    }
+  }
+
+  @override
+  void dispose() {
+    _inboxTabController.removeListener(_handleInboxTabChanged);
+    _inboxTabController.dispose();
+    super.dispose();
+  }
+
+  void _handleInboxTabChanged() {
+    if (_inboxTabController.index == 1 && !_chatTabReady) {
+      setState(() => _chatTabReady = true);
+    }
+  }
 
   String? get _sourceApp => switch (_filter) {
         _WorkInboxFilter.customer => 'van2',
         _WorkInboxFilter.merchant => 'van1',
         _WorkInboxFilter.rider => 'van3',
+        _WorkInboxFilter.productClaim => 'van2',
         _ => null,
       };
 
   AdminWorkItemKind? get _kindFilter => switch (_filter) {
         _WorkInboxFilter.productReview => AdminWorkItemKind.productReview,
+        _WorkInboxFilter.productClaim => AdminWorkItemKind.supportTicket,
         _WorkInboxFilter.all => null,
         _ => AdminWorkItemKind.supportTicket,
       };
+
+  bool _matchesProductClaimFilter(AdminWorkItem item) {
+    if (_filter != _WorkInboxFilter.productClaim) {
+      return true;
+    }
+    final ticket = item.ticket;
+    return ticket != null && ticket.isProductClaimTicket;
+  }
 
   Future<void> _approveProduct(AdminProductRecord product) async {
     final adminUid = FirebaseAuth.instance.currentUser?.uid;
@@ -178,32 +234,38 @@ class _AdminWorkInboxScreenState extends State<AdminWorkInboxScreen> {
   Widget build(BuildContext context) {
     final workBody = _buildWorkInboxBody();
 
-    final tabbed = DefaultTabController(
-      length: 2,
-      child: Column(
-        children: <Widget>[
-          Material(
-            color: Colors.white,
-            child: TabBar(
-              labelColor: const Color(0xFFE65100),
-              unselectedLabelColor: const Color(0xFF6B7280),
-              indicatorColor: const Color(0xFFE65100),
-              tabs: const <Tab>[
-                Tab(text: 'งานแอดมิน'),
-                Tab(text: 'แชทแอดมิน'),
-              ],
-            ),
+    final tabbed = Column(
+      children: <Widget>[
+        Material(
+          color: Colors.white,
+          child: TabBar(
+            controller: _inboxTabController,
+            labelColor: const Color(0xFFE65100),
+            unselectedLabelColor: const Color(0xFF6B7280),
+            indicatorColor: const Color(0xFFE65100),
+            tabs: const <Tab>[
+              Tab(text: 'งานแอดมิน'),
+              Tab(text: 'แชทแอดมิน'),
+            ],
           ),
-          Expanded(
-            child: TabBarView(
-              children: <Widget>[
-                workBody,
-                const AdminInternalChatHubScreen(embedded: true),
-              ],
-            ),
+        ),
+        Expanded(
+          child: TabBarView(
+            controller: _inboxTabController,
+            children: <Widget>[
+              workBody,
+              _chatTabReady
+                  ? const AdminInternalChatHubScreen(embedded: true)
+                  : const Center(
+                      child: Text(
+                        'เลือกแท็บแชทแอดมินเพื่อโหลด',
+                        style: TextStyle(color: Color(0xFF6B7280)),
+                      ),
+                    ),
+            ],
           ),
-        ],
-      ),
+        ),
+      ],
     );
 
     if (widget.embedded) {
@@ -215,17 +277,26 @@ class _AdminWorkInboxScreenState extends State<AdminWorkInboxScreen> {
         backgroundColor: const Color(0xFFE65100),
         foregroundColor: Colors.white,
         title: const Text('งานแอดมิน'),
-        bottom: const TabBar(
-          tabs: <Tab>[
+        bottom: TabBar(
+          controller: _inboxTabController,
+          tabs: const <Tab>[
             Tab(text: 'งานแอดมิน'),
             Tab(text: 'แชทแอดมิน'),
           ],
         ),
       ),
       body: TabBarView(
+        controller: _inboxTabController,
         children: <Widget>[
           workBody,
-          const AdminInternalChatHubScreen(embedded: true),
+          _chatTabReady
+              ? const AdminInternalChatHubScreen(embedded: true)
+              : const Center(
+                  child: Text(
+                    'เลือกแท็บแชทแอดมินเพื่อโหลด',
+                    style: TextStyle(color: Color(0xFF6B7280)),
+                  ),
+                ),
         ],
       ),
     );
@@ -251,6 +322,12 @@ class _AdminWorkInboxScreenState extends State<AdminWorkInboxScreen> {
                 selected: _filter == _WorkInboxFilter.productReview,
                 onSelected: () =>
                     setState(() => _filter = _WorkInboxFilter.productReview),
+              ),
+              _FilterChip(
+                label: 'ขอเคลม',
+                selected: _filter == _WorkInboxFilter.productClaim,
+                onSelected: () =>
+                    setState(() => _filter = _WorkInboxFilter.productClaim),
               ),
               _FilterChip(
                 label: 'ลูกค้า',
@@ -291,7 +368,9 @@ class _AdminWorkInboxScreenState extends State<AdminWorkInboxScreen> {
               }
 
               final inbox = snapshot.data;
-              final items = inbox?.items ?? const <AdminWorkItem>[];
+              final items = (inbox?.items ?? const <AdminWorkItem>[])
+                  .where(_matchesProductClaimFilter)
+                  .toList(growable: false);
               if (items.isEmpty) {
                 return const Center(
                   child: Text(

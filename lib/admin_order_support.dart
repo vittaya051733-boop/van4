@@ -22,6 +22,8 @@ class AdminSettlementFeeRates {
     this.leaderRate = 0.15,
     this.riderCreditDelayMinutes = 120,
     this.shopCreditDelayMinutes = 120,
+    this.withdrawBankCsvThreshold = 5,
+    this.withdrawFeeBaht = 10,
   });
 
   static const AdminSettlementFeeRates defaults = AdminSettlementFeeRates();
@@ -31,6 +33,8 @@ class AdminSettlementFeeRates {
   final double leaderRate;
   final int riderCreditDelayMinutes;
   final int shopCreditDelayMinutes;
+  final int withdrawBankCsvThreshold;
+  final double withdrawFeeBaht;
 
   double get gpRatePercent => gpRate * 100;
   double get riderPlatformRatePercent => riderPlatformRate * 100;
@@ -59,7 +63,22 @@ class AdminSettlementFeeRates {
       leaderRate: _readRatePercent(data, 'leaderRatePercent', 15) / 100,
       riderCreditDelayMinutes: _readDelayMinutes(data, 'riderCreditDelayMinutes', 120),
       shopCreditDelayMinutes: _readDelayMinutes(data, 'shopCreditDelayMinutes', 120),
+      withdrawBankCsvThreshold:
+          _readDelayMinutes(data, 'withdrawBankCsvThreshold', 5),
+      withdrawFeeBaht: _readMoneyBaht(data, 'withdrawFeeBaht', 10),
     );
+  }
+
+  static double _readMoneyBaht(
+    Map<String, dynamic> data,
+    String key,
+    double fallback,
+  ) {
+    final value = data[key];
+    if (value is num && value >= 0) {
+      return value.toDouble();
+    }
+    return fallback;
   }
 
   static int _readDelayMinutes(

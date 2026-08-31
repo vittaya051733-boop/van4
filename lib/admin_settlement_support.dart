@@ -1,7 +1,8 @@
 import 'dart:convert';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:cloud_functions/cloud_functions.dart';
+
+import 'utils/guarded_functions.dart';
 
 import 'admin_repository.dart';
 import 'admin_order_support.dart';
@@ -189,6 +190,8 @@ class AdminSettlementSupport {
         'leaderRatePercent': rates.leaderRatePercent,
         'riderCreditDelayMinutes': rates.riderCreditDelayMinutes,
         'shopCreditDelayMinutes': rates.shopCreditDelayMinutes,
+        'withdrawBankCsvThreshold': rates.withdrawBankCsvThreshold,
+        'withdrawFeeBaht': rates.withdrawFeeBaht,
         'updatedAt': FieldValue.serverTimestamp(),
       },
       SetOptions(merge: true),
@@ -201,10 +204,9 @@ class AdminSettlementSupport {
     required String action,
     String? reason,
   }) async {
-    final functions =
-        FirebaseFunctions.instanceFor(region: 'asia-southeast1');
-    await functions.httpsCallable('adminUpdateOrderCreditRelease').call(
-      <String, dynamic>{
+    await GuardedFunctions.call(
+      'adminUpdateOrderCreditRelease',
+      parameters: <String, dynamic>{
         'orderId': orderId,
         'target': target,
         'action': action,

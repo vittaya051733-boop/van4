@@ -5,6 +5,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 
 import 'models/admin_peer_profile.dart';
+import 'services/admin_firestore.dart';
 
 class AdminDirectoryEntry {
   const AdminDirectoryEntry({
@@ -170,7 +171,7 @@ class AdminInternalChatRepository {
   static const int maxImages = 4;
   static const int maxFiles = 2;
 
-  static final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+  static final FirebaseFirestore _firestore = AdminFirestore.instance;
 
   static String? get _currentUid => FirebaseAuth.instance.currentUser?.uid;
 
@@ -226,19 +227,25 @@ class AdminInternalChatRepository {
   }
 
   static Future<String> ensureTeamThread() async {
-    final ref = _firestore.collection('admin_internal_threads').doc(teamThreadId);
-    final snap = await ref.get();
-    if (!snap.exists) {
-      await ref.set(<String, dynamic>{
-        'type': 'team',
-        'title': 'ห้องทีมแอดมิน',
-        'participantUids': const <String>[],
-        'createdAt': FieldValue.serverTimestamp(),
-        'lastMessageAt': FieldValue.serverTimestamp(),
-        'lastMessagePreview': 'เริ่มแชททีมแอดมิน',
-      });
-    }
-    return teamThreadId;
+    return AdminFirestore.runWithRetry<String>(
+      () async {
+        final ref =
+            _firestore.collection('admin_internal_threads').doc(teamThreadId);
+        final snap = await ref.get();
+        if (!snap.exists) {
+          await ref.set(<String, dynamic>{
+            'type': 'team',
+            'title': 'ห้องทีมแอดมิน',
+            'participantUids': const <String>[],
+            'createdAt': FieldValue.serverTimestamp(),
+            'lastMessageAt': FieldValue.serverTimestamp(),
+            'lastMessagePreview': 'เริ่มแชททีมแอดมิน',
+          });
+        }
+        return teamThreadId;
+      },
+      label: 'ensureTeamThread',
+    );
   }
 
   static Future<String> ensureDmThread(AdminPeerProfile peer) async {
@@ -246,25 +253,30 @@ class AdminInternalChatRepository {
     if (currentUid == null) {
       throw StateError('กรุณาเข้าสู่ระบบ');
     }
-    final threadId = dmThreadIdFor(currentUid, peer.uid);
-    final ref = _firestore.collection('admin_internal_threads').doc(threadId);
-    final snap = await ref.get();
-    if (!snap.exists) {
-      await ref.set(<String, dynamic>{
-        'type': 'dm',
-        'title': peer.displayName,
-        'participantUids': <String>[currentUid, peer.uid],
-        'participantEmails': <String>[
-          if (FirebaseAuth.instance.currentUser?.email != null)
-            FirebaseAuth.instance.currentUser!.email!.trim().toLowerCase(),
-          if (peer.email != null) peer.email!.trim().toLowerCase(),
-        ],
-        'createdAt': FieldValue.serverTimestamp(),
-        'lastMessageAt': FieldValue.serverTimestamp(),
-        'lastMessagePreview': 'เริ่มแชทส่วนตัว',
-      });
-    }
-    return threadId;
+    return AdminFirestore.runWithRetry<String>(
+      () async {
+        final threadId = dmThreadIdFor(currentUid, peer.uid);
+        final ref = _firestore.collection('admin_internal_threads').doc(threadId);
+        final snap = await ref.get();
+        if (!snap.exists) {
+          await ref.set(<String, dynamic>{
+            'type': 'dm',
+            'title': peer.displayName,
+            'participantUids': <String>[currentUid, peer.uid],
+            'participantEmails': <String>[
+              if (FirebaseAuth.instance.currentUser?.email != null)
+                FirebaseAuth.instance.currentUser!.email!.trim().toLowerCase(),
+              if (peer.email != null) peer.email!.trim().toLowerCase(),
+            ],
+            'createdAt': FieldValue.serverTimestamp(),
+            'lastMessageAt': FieldValue.serverTimestamp(),
+            'lastMessagePreview': 'เริ่มแชทส่วนตัว',
+          });
+        }
+        return threadId;
+      },
+      label: 'ensureDmThread',
+    );
   }
 
   static Future<void> markThreadRead(String threadId) async {
@@ -272,12 +284,15 @@ class AdminInternalChatRepository {
     if (currentUid == null) {
       return;
     }
-    await _firestore.collection('admin_internal_threads').doc(threadId).set(
-      <String, dynamic>{
-        'unreadByUid.$currentUid': false,
-        'updatedAt': FieldValue.serverTimestamp(),
-      },
-      SetOptions(merge: true),
+    await AdminFirestore.runWithRetry<void>(
+      () => _firestore.collection('admin_internal_threads').doc(threadId).set(
+        <String, dynamic>{
+          'unreadByUid.$currentUid': false,
+          'updatedAt': FieldValue.serverTimestamp(),
+        },
+        SetOptions(merge: true),
+      ),
+      label: 'markThreadRead',
     );
   }
 
@@ -310,7 +325,10 @@ class AdminInternalChatRepository {
 
     final threadRef = _firestore.collection('admin_internal_threads').doc(threadId);
     final messageRef = threadRef.collection('messages').doc();
-    final threadSnap = await threadRef.get();
+    final threadSnap = await AdminFirestore.runWithRetry(
+      () => threadRef.get(),
+      label: 'sendMessage.thread',
+    );
     final participantUids = ((threadSnap.data()?['participantUids'] as List?) ??
             const <dynamic>[])
         .map((item) => item.toString())
@@ -325,37 +343,42 @@ class AdminInternalChatRepository {
     }
     unreadUpdates['unreadByUid.$senderUid'] = false;
 
-    final batch = _firestore.batch();
-    batch.set(messageRef, <String, dynamic>{
-      'senderUid': senderUid,
-      'senderEmail': user?.email,
-      'senderName': user?.displayName?.trim().isNotEmpty == true
-          ? user!.displayName!.trim()
-          : (user?.email ?? 'แอดมิน'),
-      'message': trimmed,
-      'imageUrls': imageUrls,
-      'attachments': attachments
-          .map(
-            (item) => <String, dynamic>{
-              'name': item.name,
-              'url': item.url,
-              'mimeType': item.mimeType,
-            },
-          )
-          .toList(growable: false),
-      'createdAt': FieldValue.serverTimestamp(),
-    });
-    batch.set(
-      threadRef,
-      <String, dynamic>{
-        'lastMessagePreview': preview,
-        'lastMessageAt': FieldValue.serverTimestamp(),
-        'lastSenderUid': senderUid,
-        ...unreadUpdates,
+    await AdminFirestore.runWithRetry<void>(
+      () async {
+        final batch = _firestore.batch();
+        batch.set(messageRef, <String, dynamic>{
+          'senderUid': senderUid,
+          'senderEmail': user?.email,
+          'senderName': user?.displayName?.trim().isNotEmpty == true
+              ? user!.displayName!.trim()
+              : (user?.email ?? 'แอดมิน'),
+          'message': trimmed,
+          'imageUrls': imageUrls,
+          'attachments': attachments
+              .map(
+                (item) => <String, dynamic>{
+                  'name': item.name,
+                  'url': item.url,
+                  'mimeType': item.mimeType,
+                },
+              )
+              .toList(growable: false),
+          'createdAt': FieldValue.serverTimestamp(),
+        });
+        batch.set(
+          threadRef,
+          <String, dynamic>{
+            'lastMessagePreview': preview,
+            'lastMessageAt': FieldValue.serverTimestamp(),
+            'lastSenderUid': senderUid,
+            ...unreadUpdates,
+          },
+          SetOptions(merge: true),
+        );
+        await batch.commit();
       },
-      SetOptions(merge: true),
+      label: 'sendMessage',
     );
-    await batch.commit();
   }
 
   static Future<List<String>> _uploadImages(
@@ -420,35 +443,41 @@ class AdminInternalChatRepository {
     if (trimmed.isEmpty) {
       return null;
     }
-    final presence = await _firestore.collection('admin_presence').doc(trimmed).get();
-    if (presence.exists) {
-      final data = presence.data() ?? <String, dynamic>{};
-      return AdminPeerProfile(
-        uid: trimmed,
-        displayName: (data['displayName'] as String?)?.trim().isNotEmpty == true
-            ? data['displayName'].toString().trim()
-            : 'แอดมิน',
-        email: (data['email'] as String?)?.trim(),
-      );
-    }
+    return AdminFirestore.runWithRetry<AdminPeerProfile?>(
+      () async {
+        final presence =
+            await _firestore.collection('admin_presence').doc(trimmed).get();
+        if (presence.exists) {
+          final data = presence.data() ?? <String, dynamic>{};
+          return AdminPeerProfile(
+            uid: trimmed,
+            displayName: (data['displayName'] as String?)?.trim().isNotEmpty == true
+                ? data['displayName'].toString().trim()
+                : 'แอดมิน',
+            email: (data['email'] as String?)?.trim(),
+          );
+        }
 
-    final admins = await _firestore
-        .collection('admins')
-        .where('authUid', isEqualTo: trimmed)
-        .limit(1)
-        .get();
-    if (admins.docs.isNotEmpty) {
-      final doc = admins.docs.first;
-      final data = doc.data();
-      return AdminPeerProfile(
-        uid: trimmed,
-        displayName: (data['displayName'] as String?)?.trim().isNotEmpty == true
-            ? data['displayName'].toString().trim()
-            : doc.id,
-        email: doc.id,
-      );
-    }
-    return AdminPeerProfile(uid: trimmed, displayName: 'แอดมิน');
+        final admins = await _firestore
+            .collection('admins')
+            .where('authUid', isEqualTo: trimmed)
+            .limit(1)
+            .get();
+        if (admins.docs.isNotEmpty) {
+          final doc = admins.docs.first;
+          final data = doc.data();
+          return AdminPeerProfile(
+            uid: trimmed,
+            displayName: (data['displayName'] as String?)?.trim().isNotEmpty == true
+                ? data['displayName'].toString().trim()
+                : doc.id,
+            email: doc.id,
+          );
+        }
+        return AdminPeerProfile(uid: trimmed, displayName: 'แอดมิน');
+      },
+      label: 'fetchPeerProfile',
+    );
   }
 
   static AdminPeerProfile? peerFromDmThread(

@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 
 import 'admin_announcement_screen.dart';
 import 'admin_catalog_review_screen.dart';
+import 'admin_claim_screen.dart';
+import 'admin_credit_hub_screen.dart';
 import 'admin_ecosystem_health_screen.dart';
 import 'admin_home_shelves_screen.dart';
 import 'admin_pricing_config_screen.dart';
@@ -14,7 +16,9 @@ import 'admin_payout_screens.dart';
 import 'admin_withdraw_queue_screen.dart';
 import 'admin_repository.dart';
 import 'admin_shop_screens.dart';
+import 'admin_support_screens.dart';
 import 'admin_social_dashboard_screen.dart';
+import 'widgets/admin_order_contact_actions.dart';
 import 'admin_work_inbox_screen.dart';
 import 'admin_notifications_tab.dart';
 import 'admin_settings_tab.dart';
@@ -44,6 +48,7 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: Colors.white,
       appBar: AppBar(
         backgroundColor: const Color(0xFFE65100),
         foregroundColor: Colors.white,
@@ -309,6 +314,17 @@ class AdminHomeMenuBody extends StatelessWidget {
           onTap: () => Navigator.of(context).push(
             MaterialPageRoute<void>(
               builder: (_) => const AdminSettlementFeeConfigScreen(),
+            ),
+          ),
+        ),
+        const SizedBox(height: 12),
+        _AdminPrimaryButton(
+          icon: Icons.toll_outlined,
+          title: 'เครดิตระบบ',
+          subtitle: 'ดูยอด van1/van3 รวม · รายบุคคล · ปรับ ledger (+/-)',
+          onTap: () => Navigator.of(context).push(
+            MaterialPageRoute<void>(
+              builder: (_) => const AdminCreditHubScreen(),
             ),
           ),
         ),
@@ -720,6 +736,13 @@ class AdminOrderDetailScreen extends StatelessWidget {
               if (order.paymentMethod != null) 'ช่องทางชำระ: ${order.paymentMethod}',
               if (order.paymentStatus != null) 'สถานะชำระ: ${order.paymentStatus}',
               if (order.sourceApp != null) 'source: ${order.sourceApp}',
+              if (order.orderType != null) 'ประเภท: ${order.orderType}',
+              if (order.originOrderId != null) 'ออเดอร์ต้นทาง: ${order.originOrderId}',
+              if (order.claimStatus != null) 'เคลม: ${order.claimStatus}',
+              if (order.replacementOrderId != null)
+                'ออเดอร์ทดแทน: ${order.replacementOrderId}',
+              if (order.claimCreditCouponId != null)
+                'คูปองเครดิต: ${order.claimCreditCouponId}',
               if (order.cancelReason != null) 'เหตุผลยกเลิก: ${order.cancelReason}',
             ],
           ),
@@ -740,6 +763,32 @@ class AdminOrderDetailScreen extends StatelessWidget {
                 ),
               ],
             ),
+          ),
+          const SizedBox(height: 12),
+          FutureBuilder<AdminSupportTicket?>(
+            future: AdminRepositorySupport.findOpenClaimTicketForOrder(order.id),
+            builder: (context, ticketSnapshot) {
+              final pendingTicket = ticketSnapshot.data;
+              return _detailSection(
+                context,
+                title: 'ติดต่อ / เคลม',
+                child: AdminOrderContactActions(
+                  order: order,
+                  pendingClaimTicketId: pendingTicket?.id,
+                  onOpenClaimTicket: pendingTicket == null
+                      ? null
+                      : () {
+                          Navigator.of(context).push(
+                            MaterialPageRoute<void>(
+                              builder: (_) => AdminSupportTicketDetailScreen(
+                                ticket: pendingTicket,
+                              ),
+                            ),
+                          );
+                        },
+                ),
+              );
+            },
           ),
           if (order.status.toLowerCase() == 'delivered') ...<Widget>[
             const SizedBox(height: 12),
@@ -810,6 +859,28 @@ class AdminOrderDetailScreen extends StatelessWidget {
                 children: imageUrls
                     .map((url) => _OrderImagePreview(url: url))
                     .toList(growable: false),
+              ),
+            ),
+          ],
+          if (!isCancelled &&
+              category != AdminOrderCategory.refund &&
+              !order.isClaimReplacement) ...<Widget>[
+            const SizedBox(height: 20),
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton.icon(
+                onPressed: () {
+                  Navigator.of(context).push(
+                    MaterialPageRoute<void>(
+                      builder: (_) => AdminClaimScreen(order: order),
+                    ),
+                  );
+                },
+                style: FilledButton.styleFrom(
+                  backgroundColor: const Color(0xFFE65100),
+                ),
+                icon: const Icon(Icons.assignment_return_outlined),
+                label: Text(order.hasResolvedClaim ? 'ดูการเคลม' : 'เคลมสินค้า'),
               ),
             ),
           ],

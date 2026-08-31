@@ -7,6 +7,8 @@ import 'admin_repository.dart';
 import 'admin_screens.dart';
 import 'services/admin_illegal_product_alert_service.dart';
 import 'services/admin_presence_service.dart';
+import 'services/admin_firestore.dart';
+import 'services/ecosystem_health_service.dart';
 
 class VanMarketAdminApp extends StatelessWidget {
   const VanMarketAdminApp({super.key});
@@ -19,16 +21,43 @@ class VanMarketAdminApp extends StatelessWidget {
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(
           seedColor: const Color(0xFFE65100),
+          brightness: Brightness.light,
           surface: Colors.white,
+        ).copyWith(
+          surface: Colors.white,
+          surfaceBright: Colors.white,
+          surfaceDim: Colors.white,
+          surfaceContainerLowest: Colors.white,
+          surfaceContainerLow: Colors.white,
+          surfaceContainer: Colors.white,
+          surfaceContainerHigh: Colors.white,
+          surfaceContainerHighest: Colors.white,
+          surfaceTint: Colors.transparent,
         ),
         scaffoldBackgroundColor: Colors.white,
         canvasColor: Colors.white,
+        cardColor: Colors.white,
         cardTheme: const CardThemeData(
           color: Colors.white,
           surfaceTintColor: Colors.transparent,
         ),
         dialogTheme: const DialogThemeData(
           backgroundColor: Colors.white,
+          surfaceTintColor: Colors.transparent,
+        ),
+        bottomSheetTheme: const BottomSheetThemeData(
+          backgroundColor: Colors.white,
+          surfaceTintColor: Colors.transparent,
+        ),
+        navigationBarTheme: const NavigationBarThemeData(
+          backgroundColor: Colors.white,
+          surfaceTintColor: Colors.transparent,
+          indicatorColor: Color(0xFFFFE0B2),
+        ),
+        appBarTheme: const AppBarTheme(
+          backgroundColor: Color(0xFFE65100),
+          foregroundColor: Colors.white,
+          surfaceTintColor: Colors.transparent,
         ),
       ),
       home: const AdminAuthGate(),
@@ -36,8 +65,25 @@ class VanMarketAdminApp extends StatelessWidget {
   }
 }
 
-class AdminAuthGate extends StatelessWidget {
+class AdminAuthGate extends StatefulWidget {
   const AdminAuthGate({super.key});
+
+  @override
+  State<AdminAuthGate> createState() => _AdminAuthGateState();
+}
+
+class _AdminAuthGateState extends State<AdminAuthGate> {
+  User? _accessUser;
+  Future<AdminAccessCheck>? _accessFuture;
+
+  Future<AdminAccessCheck> _accessFor(User user) {
+    if (_accessUser?.uid == user.uid && _accessFuture != null) {
+      return _accessFuture!;
+    }
+    _accessUser = user;
+    _accessFuture = AdminRepository.checkAdminAccess();
+    return _accessFuture!;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -50,11 +96,13 @@ class AdminAuthGate extends StatelessWidget {
 
         final user = authSnapshot.data;
         if (user == null) {
+          _accessUser = null;
+          _accessFuture = null;
           return const AdminLoginScreen();
         }
 
         return FutureBuilder<AdminAccessCheck>(
-          future: AdminRepository.checkAdminAccess(),
+          future: _accessFor(user),
           builder: (context, adminSnapshot) {
             if (adminSnapshot.connectionState == ConnectionState.waiting) {
               return const _AdminLoadingScreen(
@@ -63,7 +111,10 @@ class AdminAuthGate extends StatelessWidget {
             }
 
             if (adminSnapshot.data?.allowed == true) {
+              unawaited(AdminFirestore.warmUp());
               unawaited(AdminPresenceService.instance.ensureRegistered());
+              EcosystemHealthService.instance.startHeartbeatWatch();
+              unawaited(EcosystemHealthService.instance.runProbes());
               return _AdminIllegalProductAlertHost(
                 child: AdminHomeScreen(user: user),
               );
@@ -143,6 +194,7 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
         .toDouble();
 
     return Scaffold(
+      backgroundColor: Colors.white,
       body: Center(
         child: SingleChildScrollView(
           padding: const EdgeInsets.all(24),
@@ -279,6 +331,7 @@ class _AdminLoadingScreen extends StatelessWidget {
         .toDouble();
 
     return Scaffold(
+      backgroundColor: Colors.white,
       body: Center(
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -324,6 +377,7 @@ class _AdminAccessDeniedScreen extends StatelessWidget {
         : 'อีเมลนี้ยังไม่อยู่ใน collection admins (แอดมิน)';
 
     return Scaffold(
+      backgroundColor: Colors.white,
       body: Center(
         child: Padding(
           padding: const EdgeInsets.all(24),

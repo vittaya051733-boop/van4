@@ -3,9 +3,12 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 
+import 'admin_claim_screen.dart';
 import 'admin_image_widgets.dart';
 import 'admin_repository.dart';
+import 'models/admin_claim_request.dart';
 import 'utils/admin_support_call_launcher.dart';
+import 'widgets/admin_order_contact_actions.dart';
 
 class AdminSupportInboxScreen extends StatefulWidget {
   const AdminSupportInboxScreen({super.key});
@@ -307,6 +310,28 @@ class _AdminSupportTicketDetailScreenState
     );
   }
 
+  Future<void> _openClaimFromTicket(AdminSupportTicket ticket) async {
+    final orderId = ticket.orderId?.trim();
+    if (orderId == null || orderId.isEmpty) {
+      return;
+    }
+    final order = await AdminRepository.fetchOrderById(orderId);
+    if (!mounted || order == null) {
+      return;
+    }
+    final claimRequest = ticket.claimRequest;
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => AdminClaimScreen(
+          order: order,
+          initialSelectedQty: claimRequest?.selectedQuantities,
+          initialReason: claimRequest?.reason,
+          linkedTicketId: ticket.id,
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final ticket = widget.ticket;
@@ -362,6 +387,23 @@ class _AdminSupportTicketDetailScreenState
                         'โทร: ${ticket.requesterPhone}',
                         style: const TextStyle(color: Color(0xFF6B7280)),
                       ),
+                    if ((ticket.orderId ?? '').trim().isNotEmpty) ...<Widget>[
+                      const SizedBox(height: 12),
+                      _TicketLinkedOrderCard(
+                        orderId: ticket.orderId!.trim(),
+                        ticketId: ticket.id,
+                        claimRequest: ticket.claimRequest,
+                      ),
+                    ],
+                    if (ticket.claimRequest != null) ...<Widget>[
+                      const SizedBox(height: 12),
+                      AdminClaimRequestCard(
+                        claimRequest: ticket.claimRequest!,
+                        onResolve: (ticket.orderId ?? '').trim().isEmpty
+                            ? null
+                            : () => _openClaimFromTicket(ticket),
+                      ),
+                    ],
                   ],
                 ),
                 const SizedBox(height: 12),
@@ -686,6 +728,24 @@ class AdminSupportTicketTile extends StatelessWidget {
                       sourceApp: ticket.sourceApp,
                       status: ticket.status,
                     ),
+                    if (ticket.isProductClaimTicket) ...<Widget>[
+                      const SizedBox(height: 6),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFFFF7ED),
+                          borderRadius: BorderRadius.circular(999),
+                        ),
+                        child: const Text(
+                          'ขอเคลม',
+                          style: TextStyle(
+                            color: Color(0xFF9A3412),
+                            fontWeight: FontWeight.w800,
+                            fontSize: 11,
+                          ),
+                        ),
+                      ),
+                    ],
                     const SizedBox(height: 8),
                     Text(
                       ticket.topicLabel,
@@ -710,6 +770,18 @@ class AdminSupportTicketTile extends StatelessWidget {
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(fontSize: 13, height: 1.35),
                     ),
+                    if ((ticket.orderId ?? '').trim().isNotEmpty)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 6),
+                        child: Text(
+                          'ออเดอร์: ${ticket.orderId!.trim()}',
+                          style: const TextStyle(
+                            color: Color(0xFF9A3412),
+                            fontSize: 12,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
                     if (ticket.unreadForAdmin)
                       Padding(
                         padding: const EdgeInsets.only(top: 8),
@@ -736,6 +808,85 @@ class AdminSupportTicketTile extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+class _TicketLinkedOrderCard extends StatelessWidget {
+  const _TicketLinkedOrderCard({
+    required this.orderId,
+    this.ticketId,
+    this.claimRequest,
+  });
+
+  final String orderId;
+  final String? ticketId;
+  final AdminClaimRequest? claimRequest;
+
+  Future<void> _openClaim(BuildContext context, AdminOrderRecord order) async {
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => AdminClaimScreen(
+          order: order,
+          initialSelectedQty: claimRequest?.selectedQuantities,
+          initialReason: claimRequest?.reason,
+          linkedTicketId: ticketId,
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<AdminOrderRecord?>(
+      future: AdminRepository.fetchOrderById(orderId),
+      builder: (context, snapshot) {
+        final order = snapshot.data;
+        return Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: const Color(0xFFFFF7ED),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: const Color(0xFFFED7AA)),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              Text(
+                'ออเดอร์ที่ผูก: ${order?.displayOrderNumber ?? orderId}',
+                style: const TextStyle(fontWeight: FontWeight.w700),
+              ),
+              if (order != null)
+                Text(
+                  '${order.status} • ${order.items.length} รายการ',
+                  style: const TextStyle(color: Color(0xFF6B7280), fontSize: 12),
+                ),
+              if (snapshot.hasError)
+                const Text(
+                  'โหลดออเดอร์ไม่สำเร็จ',
+                  style: TextStyle(color: Color(0xFFB91C1C), fontSize: 12),
+                ),
+              if (order != null) ...<Widget>[
+                const SizedBox(height: 8),
+                AdminOrderContactActions(order: order, compact: true),
+                const SizedBox(height: 8),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: FilledButton.tonal(
+                    onPressed: () => _openClaim(context, order),
+                    child: Text(
+                      claimRequest?.isPending == true
+                          ? 'ดำเนินการเคลม'
+                          : 'เคลมสินค้า',
+                    ),
+                  ),
+                ),
+              ],
+            ],
+          ),
+        );
+      },
     );
   }
 }

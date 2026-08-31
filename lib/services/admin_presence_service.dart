@@ -11,8 +11,8 @@ class AdminPresenceService {
 
   bool _started = false;
 
-  Future<void> ensureRegistered() async {
-    if (_started || kIsWeb) {
+  Future<void> ensureRegistered({bool force = false}) async {
+    if ((_started && !force) || kIsWeb) {
       return;
     }
     _started = true;
@@ -29,6 +29,7 @@ class AdminPresenceService {
       final now = FieldValue.serverTimestamp();
 
       if (email != null && email.isNotEmpty) {
+        // Rules allow only authUid/email/displayName/lastSeenAt on self-update.
         await FirebaseFirestore.instance.collection('admins').doc(email).set(
           <String, dynamic>{
             'authUid': user.uid,
@@ -37,7 +38,6 @@ class AdminPresenceService {
                 ? user.displayName!.trim()
                 : email,
             'lastSeenAt': now,
-            'active': true,
           },
           SetOptions(merge: true),
         );

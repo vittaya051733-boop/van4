@@ -178,6 +178,8 @@ class _AdminSettlementFeeConfigScreenState
   final _leaderController = TextEditingController();
   final _riderDelayController = TextEditingController();
   final _shopDelayController = TextEditingController();
+  final _withdrawCsvThresholdController = TextEditingController();
+  final _withdrawFeeController = TextEditingController();
   bool _loading = true;
   bool _saving = false;
 
@@ -194,6 +196,8 @@ class _AdminSettlementFeeConfigScreenState
     _leaderController.dispose();
     _riderDelayController.dispose();
     _shopDelayController.dispose();
+    _withdrawCsvThresholdController.dispose();
+    _withdrawFeeController.dispose();
     super.dispose();
   }
 
@@ -206,6 +210,11 @@ class _AdminSettlementFeeConfigScreenState
       _leaderController.text = _formatPercent(rates.leaderRatePercent);
       _riderDelayController.text = rates.riderCreditDelayMinutes.toString();
       _shopDelayController.text = rates.shopCreditDelayMinutes.toString();
+      _withdrawCsvThresholdController.text =
+          rates.withdrawBankCsvThreshold.toString();
+      _withdrawFeeController.text = rates.withdrawFeeBaht.toStringAsFixed(
+        rates.withdrawFeeBaht == rates.withdrawFeeBaht.roundToDouble() ? 0 : 2,
+      );
     } finally {
       if (mounted) {
         setState(() => _loading = false);
@@ -244,6 +253,18 @@ class _AdminSettlementFeeConfigScreenState
     return value;
   }
 
+  double? _parseMoneyBaht(String? raw) {
+    final text = raw?.trim();
+    if (text == null || text.isEmpty) {
+      return null;
+    }
+    final value = double.tryParse(text);
+    if (value == null || value < 0) {
+      return null;
+    }
+    return value;
+  }
+
   Future<void> _save() async {
     if (!_formKey.currentState!.validate()) {
       return;
@@ -255,6 +276,9 @@ class _AdminSettlementFeeConfigScreenState
       final leader = _parsePercent(_leaderController.text)!;
       final riderDelay = _parseDelayMinutes(_riderDelayController.text)!;
       final shopDelay = _parseDelayMinutes(_shopDelayController.text)!;
+      final csvThreshold =
+          _parseDelayMinutes(_withdrawCsvThresholdController.text)!;
+      final withdrawFee = _parseMoneyBaht(_withdrawFeeController.text)!;
       await AdminSettlementSupport.saveSettlementFeeRates(
         AdminSettlementFeeRates(
           gpRate: gp / 100,
@@ -262,6 +286,8 @@ class _AdminSettlementFeeConfigScreenState
           leaderRate: leader / 100,
           riderCreditDelayMinutes: riderDelay,
           shopCreditDelayMinutes: shopDelay,
+          withdrawBankCsvThreshold: csvThreshold,
+          withdrawFeeBaht: withdrawFee,
         ),
       );
       if (!mounted) {
@@ -359,15 +385,44 @@ class _AdminSettlementFeeConfigScreenState
                   TextFormField(
                     controller: _shopDelayController,
                     decoration: const InputDecoration(
-                      labelText: 'หน่วงเครดิตร้านค้า (นาที)',
+                      labelText: 'หน่วงเวลาก่อนแสดงรายได้ร้าน (นาที)',
                       helperText:
-                          'ค่าเริ่มต้น 120 นาที — COD และ Omise float รอปล่อยก่อนถอนได้',
+                          'เช่น 120 = 2 ชม. หลังส่งสินค้า — รอเคสลูกค้าก่อนแสดงในกระเป๋าเงิน/ถอนได้',
                       border: OutlineInputBorder(),
                       suffixText: 'นาที',
                     ),
                     keyboardType: TextInputType.number,
                     validator: (value) =>
                         _parseDelayMinutes(value) == null ? 'กรอก 0 ขึ้นไป' : null,
+                  ),
+                  const SizedBox(height: 12),
+                  TextFormField(
+                    controller: _withdrawFeeController,
+                    decoration: const InputDecoration(
+                      labelText: 'ค่าบริการถอนเงิน (บาท/ครั้ง)',
+                      helperText:
+                          'หักจากยอดที่ผู้ใช้ขอถอน — ค่าเริ่มต้น 10 บาท (ร้านค้าและไรเดอร์)',
+                      border: OutlineInputBorder(),
+                      suffixText: 'บาท',
+                    ),
+                    keyboardType:
+                        const TextInputType.numberWithOptions(decimal: true),
+                    validator: (value) =>
+                        _parseMoneyBaht(value) == null ? 'กรอก 0 ขึ้นไป' : null,
+                  ),
+                  const SizedBox(height: 12),
+                  TextFormField(
+                    controller: _withdrawCsvThresholdController,
+                    decoration: const InputDecoration(
+                      labelText: 'เกณฑ์ Export CSV ถอนธนาคาร (จำนวนรายการ)',
+                      helperText:
+                          'เมื่อคิวถอนธนาคาร >= ค่านี้ แนะนำให้ Export CSV โอนกลุ่ม (ค่าเริ่มต้น 5)',
+                      border: OutlineInputBorder(),
+                      suffixText: 'รายการ',
+                    ),
+                    keyboardType: TextInputType.number,
+                    validator: (value) =>
+                        _parseDelayMinutes(value) == null ? 'กรอก 1 ขึ้นไป' : null,
                   ),
                   const SizedBox(height: 20),
                   FilledButton.icon(
