@@ -5,9 +5,12 @@ import 'package:flutter/material.dart';
 
 import 'admin_repository.dart';
 import 'admin_screens.dart';
-import 'services/admin_illegal_product_alert_service.dart';
+import 'services/admin_alert_notification_service.dart';
+import 'services/admin_alert_preferences_service.dart';
 import 'services/admin_presence_service.dart';
 import 'services/admin_firestore.dart';
+import 'models/admin_session.dart';
+import 'services/admin_market_scope.dart';
 import 'services/ecosystem_health_service.dart';
 
 class VanMarketAdminApp extends StatelessWidget {
@@ -74,9 +77,9 @@ class AdminAuthGate extends StatefulWidget {
 
 class _AdminAuthGateState extends State<AdminAuthGate> {
   User? _accessUser;
-  Future<AdminAccessCheck>? _accessFuture;
+  Future<AdminSession>? _accessFuture;
 
-  Future<AdminAccessCheck> _accessFor(User user) {
+  Future<AdminSession> _accessFor(User user) {
     if (_accessUser?.uid == user.uid && _accessFuture != null) {
       return _accessFuture!;
     }
@@ -98,10 +101,12 @@ class _AdminAuthGateState extends State<AdminAuthGate> {
         if (user == null) {
           _accessUser = null;
           _accessFuture = null;
+          AdminSessionService.instance.clear();
+          AdminMarketScope.instance.stop();
           return const AdminLoginScreen();
         }
 
-        return FutureBuilder<AdminAccessCheck>(
+        return FutureBuilder<AdminSession>(
           future: _accessFor(user),
           builder: (context, adminSnapshot) {
             if (adminSnapshot.connectionState == ConnectionState.waiting) {
@@ -111,11 +116,18 @@ class _AdminAuthGateState extends State<AdminAuthGate> {
             }
 
             if (adminSnapshot.data?.allowed == true) {
+              final session = adminSnapshot.data!;
               unawaited(AdminFirestore.warmUp());
               unawaited(AdminPresenceService.instance.ensureRegistered());
+              AdminMarketScope.instance.configureFromSession(session);
+              AdminMarketScope.instance.start();
+              final adminEmail = user.email?.trim();
+              if (adminEmail != null && adminEmail.isNotEmpty && session.isOwner) {
+                unawaited(AdminMarketService.instance.ensureDefaultCatalog(adminEmail: adminEmail));
+              }
               EcosystemHealthService.instance.startHeartbeatWatch();
               unawaited(EcosystemHealthService.instance.runProbes());
-              return _AdminIllegalProductAlertHost(
+              return _AdminAlertNotificationHost(
                 child: AdminHomeScreen(user: user),
               );
             }
@@ -441,27 +453,27 @@ class _AdminAccessDeniedScreen extends StatelessWidget {
   }
 }
 
-class _AdminIllegalProductAlertHost extends StatefulWidget {
-  const _AdminIllegalProductAlertHost({required this.child});
+class _AdminAlertNotificationHost extends StatefulWidget {
+  const _AdminAlertNotificationHost({required this.child});
 
   final Widget child;
 
   @override
-  State<_AdminIllegalProductAlertHost> createState() =>
-      _AdminIllegalProductAlertHostState();
+  State<_AdminAlertNotificationHost> createState() =>
+      _AdminAlertNotificationHostState();
 }
 
-class _AdminIllegalProductAlertHostState
-    extends State<_AdminIllegalProductAlertHost> {
+class _AdminAlertNotificationHostState extends State<_AdminAlertNotificationHost> {
   @override
   void initState() {
     super.initState();
-    unawaited(AdminIllegalProductAlertService.instance.startMonitoring());
+    unawaited(AdminAlertPreferencesService.instance.ensureLoaded());
+    unawaited(AdminAlertNotificationService.instance.startMonitoring());
   }
 
   @override
   void dispose() {
-    unawaited(AdminIllegalProductAlertService.instance.stopMonitoring());
+    unawaited(AdminAlertNotificationService.instance.stopMonitoring());
     super.dispose();
   }
 

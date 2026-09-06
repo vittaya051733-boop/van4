@@ -5,26 +5,100 @@ service firebase.storage {
       return request.auth != null;
     }
 
-    function isAdminFromRegistry() {
+    function uid() {
+      return request.auth.uid;
+    }
+
+    function authEmail() {
+      return signedIn() && ('email' in request.auth.token)
+          ? request.auth.token.email
+          : null;
+    }
+
+    function isPrivilegedAdmin() {
       return signedIn()
-          && request.auth.token.email != null
-          && firestore.get(/databases/(default)/documents/admins/$(request.auth.token.email.lower())).data.active != false;
+          && ('admin' in request.auth.token)
+          && request.auth.token.admin == true;
+    }
+
+    function isAdminFromRegistry() {
+      return authEmail() != null
+          && firestore.exists(/databases/(default)/documents/admins/$(authEmail().lower()))
+          && firestore.get(/databases/(default)/documents/admins/$(authEmail().lower())).data.get('active', true) != false;
+    }
+
+    function isVan4Admin() {
+      return isPrivilegedAdmin() || isAdminFromRegistry();
+    }
+
+    function chatUploadParticipant(chatId) {
+      return signedIn() && chatId.matches('.*' + uid() + '.*');
+    }
+
+    function isPeerChatParticipant(chatId) {
+      return signedIn()
+          && firestore.exists(/databases/(default)/documents/chats/$(chatId))
+          && uid() in firestore.get(/databases/(default)/documents/chats/$(chatId)).data.get('participants', []);
+    }
+
+    function isInternalChatParticipant(threadId) {
+      return signedIn()
+          && (
+            threadId.matches('.*' + uid() + '.*')
+            || (
+              firestore.exists(/databases/(default)/documents/admin_internal_threads/$(threadId))
+              && uid() in firestore.get(/databases/(default)/documents/admin_internal_threads/$(threadId)).data.get('participantUids', [])
+            )
+          );
+    }
+
+    function isTeamInternalChat(threadId) {
+      return threadId == 'team'
+          && firestore.exists(/databases/(default)/documents/admin_internal_threads/team)
+          && firestore.get(/databases/(default)/documents/admin_internal_threads/team).data.get('type', '') == 'team';
+    }
+
+    // แชท van4 ↔ ร้าน/ลูกค้า
+    match /chat_uploads/{chatId}/{allPaths=**} {
+      allow read: if chatUploadParticipant(chatId)
+          || isPeerChatParticipant(chatId)
+          || isVan4Admin();
+      allow write: if chatUploadParticipant(chatId)
+          || isPeerChatParticipant(chatId)
+          || isVan4Admin();
+    }
+
+    // แชทภายในแอดมิน van4
+    match /admin_internal_chat/{threadId}/{allPaths=**} {
+      allow read: if isVan4Admin()
+          || isInternalChatParticipant(threadId)
+          || isTeamInternalChat(threadId);
+      allow write: if isVan4Admin()
+          || isInternalChatParticipant(threadId)
+          || (isTeamInternalChat(threadId) && signedIn());
     }
 
     match /project_finance/receipts/{expenseId}/{allPaths=**} {
-      allow read, write: if isAdminFromRegistry();
+      allow read, write: if isVan4Admin();
     }
 
     match /product_images/{ownerId}/{allPaths=**} {
       allow read: if true;
-      allow write: if isAdminFromRegistry();
+      allow write: if isVan4Admin();
     }
 
     match /social_media/{postId}/{allPaths=**} {
-      allow read: if isAdminFromRegistry();
-      allow write: if isAdminFromRegistry()
+      allow read: if isVan4Admin();
+      allow write: if isVan4Admin()
           && request.resource.size < 500 * 1024 * 1024
           && request.resource.contentType.matches('video/.*|image/.*');
+    }
+
+    match /admin_withdraw_slips/{requestId}/{allPaths=**} {
+      allow read: if isVan4Admin();
+      allow write: if isVan4Admin()
+          && request.resource.size < 10 * 1024 * 1024
+          && request.resource.contentType.matches('image/.*');
     }
 
     match /{allPaths=**} {

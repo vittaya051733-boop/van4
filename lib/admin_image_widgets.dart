@@ -191,3 +191,18 @@ String? resolveShopDisplayImageUrl({
   }
   return candidates.first;
 }
+
+Future<void> showAdminImagePreview(BuildContext context, String url) {
+  return showDialog<void>(
+    context: context,
+    builder: (dialogContext) => Dialog(
+      insetPadding: const EdgeInsets.all(16),
+      child: InteractiveViewer(
+        child: AdminSafeNetworkImage(
+          url: url,
+          fit: BoxFit.contain,
+        ),
+      ),
+    ),
+  );
+}

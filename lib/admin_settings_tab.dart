@@ -3,13 +3,17 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import 'dart:async';
+
 import 'admin_internal_chat_hub_screen.dart';
+import 'services/admin_alert_preferences_service.dart';
 import 'services/admin_presence_service.dart';
 import 'services/admin_startup_diagnostics.dart';
 import 'utils/admin_callable_errors.dart';
 import 'utils/app_check_guard.dart';
 import 'utils/feature_flags.dart';
 import 'utils/guarded_functions.dart';
+import 'widgets/admin_alert_focus_selector.dart';
 
 class AdminSettingsTab extends StatefulWidget {
   const AdminSettingsTab({super.key, required this.user});
@@ -29,6 +33,7 @@ class _AdminSettingsTabState extends State<AdminSettingsTab> {
   @override
   void initState() {
     super.initState();
+    unawaited(AdminAlertPreferencesService.instance.ensureLoaded());
     _runDiagnostics();
   }
 
@@ -141,6 +146,13 @@ class _AdminSettingsTabState extends State<AdminSettingsTab> {
                     height: 1.35,
                   ),
             ),
+          ],
+        ),
+        const SizedBox(height: 20),
+        _sectionTitle(context, 'การแจ้งเตือน'),
+        _infoCard(
+          children: <Widget>[
+            const AdminAlertFocusSettingsSection(),
           ],
         ),
         const SizedBox(height: 20),

@@ -3,8 +3,11 @@ import 'package:flutter/material.dart';
 
 import 'admin_add_product_screen.dart';
 import 'admin_image_widgets.dart';
+import 'admin_registration_review_screen.dart';
 import 'admin_repository.dart';
+import 'models/admin_work_task.dart';
 import 'services/admin_merchant_contract_service.dart';
+import 'widgets/admin_work_claim_bar.dart';
 
 Future<void> openAdminHelpUploadProduct(
   BuildContext context,
@@ -641,6 +644,86 @@ class _ShopCard extends StatelessWidget {
     }
   }
 
+  Future<void> _setShopSuspended(
+    BuildContext context, {
+    required bool suspended,
+  }) async {
+    final adminUid = FirebaseAuth.instance.currentUser?.uid;
+    if (adminUid == null) {
+      return;
+    }
+
+    String? reason;
+    if (suspended) {
+      final reasonController = TextEditingController();
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: Text('ระงับ ${shop.displayName}'),
+          content: TextField(
+            controller: reasonController,
+            decoration: const InputDecoration(
+              labelText: 'เหตุผล (แจ้งร้านค้า)',
+              border: OutlineInputBorder(),
+            ),
+            maxLines: 3,
+          ),
+          actions: <Widget>[
+            TextButton(onPressed: () => Navigator.pop(dialogContext, false), child: const Text('ยกเลิก')),
+            FilledButton(onPressed: () => Navigator.pop(dialogContext, true), child: const Text('ระงับ')),
+          ],
+        ),
+      );
+      if (confirmed != true || !context.mounted) {
+        reasonController.dispose();
+        return;
+      }
+      reason = reasonController.text.trim();
+      reasonController.dispose();
+    } else {
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: Text('เปิดร้าน ${shop.displayName} อีกครั้ง?'),
+          content: const Text('ร้านจะกลับมาแสดงบนแอปลูกค้า'),
+          actions: <Widget>[
+            TextButton(onPressed: () => Navigator.pop(dialogContext, false), child: const Text('ยกเลิก')),
+            FilledButton(onPressed: () => Navigator.pop(dialogContext, true), child: const Text('เปิดร้าน')),
+          ],
+        ),
+      );
+      if (confirmed != true || !context.mounted) {
+        return;
+      }
+    }
+
+    try {
+      await AdminRepository.setShopSuspended(
+        shop: shop,
+        adminUid: adminUid,
+        suspended: suspended,
+        reason: reason,
+      );
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              suspended
+                  ? 'ระงับ ${shop.displayName} แล้ว — ซ่อนจาก van2'
+                  : 'เปิดร้าน ${shop.displayName} อีกครั้งแล้ว',
+            ),
+          ),
+        );
+      }
+    } catch (error) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('อัปเดตไม่สำเร็จ: $error')),
+        );
+      }
+    }
+  }
+
   Future<void> _reject(BuildContext context) async {
     final reasonController = TextEditingController();
     final confirmed = await showDialog<bool>(
@@ -709,14 +792,19 @@ class _ShopCard extends StatelessWidget {
             'สัญญา: ${contractCancelled ? 'ยกเลิกแล้ว' : 'ยังมีผล'}',
         ];
 
-        return _AdminInfoCard(
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: <Widget>[
+            _AdminInfoCard(
           title: shop.displayName,
           subtitle: '${shop.serviceType} • ${shop.status}',
           imageUrl: displayImageUrl,
           statusChip: _StatusChip(
             label: contractCancelled
                 ? 'contract cancelled'
-                : shop.isApproved
+                : shop.adminSuspended
+                    ? 'suspended'
+                    : shop.isApproved
                     ? 'approved'
                     : shop.isRejected
                         ? 'rejected'
@@ -726,6 +814,8 @@ class _ShopCard extends StatelessWidget {
           ),
           detailLines: <String>[
             'เจ้าของ (van1): ${shop.ownerId}',
+            if (shop.adminSuspended && shop.adminSuspendReason != null)
+              'เหตุผลระงับ: ${shop.adminSuspendReason}',
             if (shop.phone != null) 'โทร: ${shop.phone}',
             if (shop.email != null) 'อีเมล: ${shop.email}',
             if (shop.address != null) 'ที่อยู่: ${shop.address}',
@@ -737,6 +827,13 @@ class _ShopCard extends StatelessWidget {
             if (shop.createdAt != null) 'อัปเดต: ${_formatDateTime(shop.createdAt!)}',
           ],
           actions: <Widget>[
+            if (!shop.isApproved && !shop.isRejected)
+              OutlinedButton.icon(
+                onPressed: () => showAdminShopDocumentReview(context, shop: shop),
+                icon: const Icon(Icons.fact_check_outlined, size: 18),
+                label: const Text('ตรวจเอกสาร'),
+              ),
+            if (!shop.isApproved && !shop.isRejected) const SizedBox(width: 8),
             if (!shop.isApproved && !shop.isRejected)
               FilledButton.icon(
                 onPressed: () => _approve(context),
@@ -766,6 +863,17 @@ class _ShopCard extends StatelessWidget {
             ),
             if (shop.isApproved && !contractCancelled)
               OutlinedButton.icon(
+                onPressed: shop.adminSuspended
+                    ? () => _setShopSuspended(context, suspended: false)
+                    : () => _setShopSuspended(context, suspended: true),
+                icon: Icon(
+                  shop.adminSuspended ? Icons.play_circle_outline : Icons.pause_circle_outline,
+                  size: 18,
+                ),
+                label: Text(shop.adminSuspended ? 'เปิดร้าน' : 'ระงับร้าน'),
+              ),
+            if (shop.isApproved && !contractCancelled)
+              OutlinedButton.icon(
                 onPressed: () => _cancelContract(context),
                 icon: const Icon(Icons.gavel_outlined, size: 18),
                 label: const Text('ยกเลิกสัญญา'),
@@ -775,6 +883,18 @@ class _ShopCard extends StatelessWidget {
                 onPressed: shop.isApproved ? null : () => _reject(context),
                 icon: const Icon(Icons.block_outlined, size: 18),
                 label: const Text('ปฏิเสธ'),
+              ),
+          ],
+            ),
+            if (!shop.isApproved && !shop.isRejected)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(4, 8, 4, 0),
+                child: AdminWorkClaimBar(
+                  sourceType: AdminWorkSourceType.shopApproval,
+                  sourceId: shop.id,
+                  title: shop.displayName,
+                  branchId: shop.branchId,
+                ),
               ),
           ],
         );
@@ -892,6 +1012,12 @@ class AdminPendingProductReviewScreen extends StatelessWidget {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: <Widget>[
+          AdminWorkClaimBar(
+            sourceType: AdminWorkSourceType.productReview,
+            sourceId: product.id,
+            title: product.name,
+          ),
+          const SizedBox(height: 12),
           if (product.imageUrls.isNotEmpty)
             SizedBox(
               height: 220,

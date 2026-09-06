@@ -1,12 +1,15 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_storage/firebase_storage.dart';
+import 'package:flutter/foundation.dart';
 
 import '../models/admin_peer_profile.dart';
 import '../models/admin_peer_chat_message.dart';
-
+import 'admin_chat_cache_service.dart';
+import 'admin_storage_helper.dart';
 class AdminPeerChatService {
   AdminPeerChatService._();
 
@@ -50,18 +53,42 @@ class AdminPeerChatService {
   }
 
   static Stream<List<AdminPeerChatMessage>> streamMessages(String chatId) {
-    return FirebaseFirestore.instance
-        .collection('chats')
-        .doc(chatId)
-        .collection('messages')
-        .orderBy('createdAt', descending: false)
-        .limit(200)
-        .snapshots()
-        .map(
-          (snapshot) => snapshot.docs
-              .map(AdminPeerChatMessage.fromDoc)
-              .toList(growable: false),
-        );
+    return Stream<List<AdminPeerChatMessage>>.multi((controller) async {
+      try {
+        final cached = await AdminChatCacheService.instance.readPeerMessages(chatId);
+        if (cached.isNotEmpty && !controller.isClosed) {
+          controller.add(cached);
+        }
+      } catch (error, stack) {
+        debugPrint('Peer chat cache read failed: $error\n$stack');
+      }
+
+      final subscription = FirebaseFirestore.instance
+          .collection('chats')
+          .doc(chatId)
+          .collection('messages')
+          .orderBy('createdAt', descending: false)
+          .limit(200)
+          .snapshots()
+          .listen(
+            (snapshot) {
+              final messages = snapshot.docs
+                  .map(AdminPeerChatMessage.fromDoc)
+                  .toList(growable: false);
+              unawaited(
+                AdminChatCacheService.instance.writePeerMessages(chatId, messages),
+              );
+              if (!controller.isClosed) {
+                controller.add(messages);
+              }
+            },
+            onError: controller.addError,
+          );
+
+      controller.onCancel = () async {
+        await subscription.cancel();
+      };
+    });
   }
 
   static Future<void> bindOrderContext({
@@ -144,7 +171,8 @@ class AdminPeerChatService {
     final fileName = file.uri.pathSegments.isNotEmpty
         ? file.uri.pathSegments.last
         : 'image.jpg';
-    final storageRef = FirebaseStorage.instance.ref().child(
+    await AdminStorageHelper.ensureUploadReady();
+    final storageRef = AdminStorageHelper.instance.ref().child(
       'chat_uploads/$chatId/${DateTime.now().millisecondsSinceEpoch}_$fileName',
     );
     await storageRef.putFile(file, SettableMetadata(contentType: 'image/jpeg'));
@@ -343,17 +371,21 @@ class AdminPeerChatService {
       },
       SetOptions(merge: true),
     );
-    batch.set(
-      targetFriendRef,
-      <String, dynamic>{
-        'uid': sender.uid,
-        ..._profilePayload(sender),
-        'lastMessage': lastMessage,
-        'lastActivity': FieldValue.serverTimestamp(),
-        'unreadCount': FieldValue.increment(1),
-      },
-      SetOptions(merge: true),
-    );
     await batch.commit();
+
+    try {
+      await targetFriendRef.set(
+        <String, dynamic>{
+          'uid': sender.uid,
+          ..._profilePayload(sender),
+          'lastMessage': lastMessage,
+          'lastActivity': FieldValue.serverTimestamp(),
+          'unreadCount': FieldValue.increment(1),
+        },
+        SetOptions(merge: true),
+      );
+    } on FirebaseException {
+      // unread ยังอยู่ที่ chats.unreadCounts แม้ preview ฝั่งคู่สนทนาเขียนไม่ได้
+    }
   }
 }

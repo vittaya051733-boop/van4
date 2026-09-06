@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 
 import 'admin_repository.dart';
+import 'models/admin_session.dart';
 import 'widgets/admin_coupon_target_picker.dart';
 
 class AdminPromotionsScreen extends StatefulWidget {
@@ -456,6 +457,12 @@ class _OfferEditorScreenState extends State<_OfferEditorScreen> {
         'conditions': conditionsPayload,
         'updatedAt': FieldValue.serverTimestamp(),
       };
+
+      final assignedBranchId = AdminSessionService.instance.assignedBranchId;
+      if (assignedBranchId != null) {
+        payload['branchId'] = assignedBranchId;
+        payload['marketId'] = assignedBranchId;
+      }
 
       if (widget.isCoupon) {
         payload['code'] = _codeController.text.trim().toUpperCase();

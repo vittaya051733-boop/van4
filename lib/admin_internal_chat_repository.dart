@@ -1,11 +1,14 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_storage/firebase_storage.dart';
-
+import 'package:flutter/foundation.dart';
 import 'models/admin_peer_profile.dart';
+import 'services/admin_chat_cache_service.dart';
 import 'services/admin_firestore.dart';
+import 'services/admin_storage_helper.dart';
 
 class AdminDirectoryEntry {
   const AdminDirectoryEntry({
@@ -113,6 +116,8 @@ class AdminInternalAttachment {
       mimeType: (map['mimeType'] as String?)?.trim() ?? 'application/octet-stream',
     );
   }
+
+  bool get isImage => AdminInternalChatRepository.isImageFile(name, mimeType);
 }
 
 class AdminInternalMessage {
@@ -171,6 +176,21 @@ class AdminInternalChatRepository {
   static const int maxImages = 4;
   static const int maxFiles = 2;
 
+  static bool isImageFile(String name, String? mimeType) {
+    final type = mimeType?.trim().toLowerCase();
+    if (type != null && type.startsWith('image/')) {
+      return true;
+    }
+    final lower = name.trim().toLowerCase();
+    return lower.endsWith('.jpg') ||
+        lower.endsWith('.jpeg') ||
+        lower.endsWith('.png') ||
+        lower.endsWith('.gif') ||
+        lower.endsWith('.webp') ||
+        lower.endsWith('.heic') ||
+        lower.endsWith('.heif');
+  }
+
   static final FirebaseFirestore _firestore = AdminFirestore.instance;
 
   static String? get _currentUid => FirebaseAuth.instance.currentUser?.uid;
@@ -212,18 +232,46 @@ class AdminInternalChatRepository {
   }
 
   static Stream<List<AdminInternalMessage>> streamMessages(String threadId) {
-    return _firestore
-        .collection('admin_internal_threads')
-        .doc(threadId)
-        .collection('messages')
-        .orderBy('createdAt', descending: false)
-        .limit(300)
-        .snapshots()
-        .map(
-          (snapshot) => snapshot.docs
-              .map(AdminInternalMessage.fromDoc)
-              .toList(growable: false),
-        );
+    return Stream<List<AdminInternalMessage>>.multi((controller) async {
+      try {
+        final cached =
+            await AdminChatCacheService.instance.readInternalMessages(threadId);
+        if (cached.isNotEmpty && !controller.isClosed) {
+          controller.add(cached);
+        }
+      } catch (error, stack) {
+        debugPrint('Internal chat cache read failed: $error\n$stack');
+      }
+
+      final subscription = _firestore
+          .collection('admin_internal_threads')
+          .doc(threadId)
+          .collection('messages')
+          .orderBy('createdAt', descending: false)
+          .limit(300)
+          .snapshots()
+          .listen(
+            (snapshot) {
+              final messages = snapshot.docs
+                  .map(AdminInternalMessage.fromDoc)
+                  .toList(growable: false);
+              unawaited(
+                AdminChatCacheService.instance.writeInternalMessages(
+                  threadId,
+                  messages,
+                ),
+              );
+              if (!controller.isClosed) {
+                controller.add(messages);
+              }
+            },
+            onError: controller.addError,
+          );
+
+      controller.onCancel = () async {
+        await subscription.cancel();
+      };
+    });
   }
 
   static Future<String> ensureTeamThread() async {
@@ -314,8 +362,26 @@ class AdminInternalChatRepository {
       throw ArgumentError('กรุณาระบุข้อความหรือแนบไฟล์');
     }
 
-    final imageUrls = await _uploadImages(threadId, imageLocalPaths);
-    final attachments = await _uploadFiles(threadId, fileLocalItems);
+    await AdminStorageHelper.ensureUploadReady();
+
+    final imagePaths = <String>[...imageLocalPaths];
+    final documentItems = <({String path, String name, String? mimeType})>[];
+    for (final item in fileLocalItems) {
+      if (isImageFile(item.name, item.mimeType)) {
+        imagePaths.add(item.path);
+      } else {
+        documentItems.add(item);
+      }
+    }
+
+    final imageUrls = await _uploadImages(
+      threadId,
+      imagePaths.take(maxImages).toList(growable: false),
+    );
+    final attachments = await _uploadFiles(
+      threadId,
+      documentItems.take(maxFiles).toList(growable: false),
+    );
 
     final preview = trimmed.isNotEmpty
         ? (trimmed.length <= 120 ? trimmed : '${trimmed.substring(0, 117)}...')
@@ -388,7 +454,7 @@ class AdminInternalChatRepository {
     if (localPaths.isEmpty) {
       return <String>[];
     }
-    final storage = FirebaseStorage.instance;
+    final storage = AdminStorageHelper.instance;
     final urls = <String>[];
     for (final path in localPaths.take(maxImages)) {
       final file = File(path);
@@ -398,7 +464,10 @@ class AdminInternalChatRepository {
       final storagePath =
           'admin_internal_chat/$threadId/images/${DateTime.now().millisecondsSinceEpoch}_${file.uri.pathSegments.last}';
       final ref = storage.ref().child(storagePath);
-      await ref.putFile(file);
+      await ref.putFile(
+        file,
+        SettableMetadata(contentType: 'image/jpeg'),
+      );
       urls.add(await ref.getDownloadURL());
     }
     return urls;
@@ -411,7 +480,7 @@ class AdminInternalChatRepository {
     if (items.isEmpty) {
       return <AdminInternalAttachment>[];
     }
-    final storage = FirebaseStorage.instance;
+    final storage = AdminStorageHelper.instance;
     final attachments = <AdminInternalAttachment>[];
     for (final item in items.take(maxFiles)) {
       final file = File(item.path);
@@ -424,18 +493,36 @@ class AdminInternalChatRepository {
       final storagePath =
           'admin_internal_chat/$threadId/files/${DateTime.now().millisecondsSinceEpoch}_$safeName';
       final ref = storage.ref().child(storagePath);
-      await ref.putFile(file);
+      final mimeType = item.mimeType?.trim().isNotEmpty == true
+          ? item.mimeType!.trim()
+          : _guessMimeType(safeName);
+      await ref.putFile(
+        file,
+        SettableMetadata(contentType: mimeType),
+      );
       attachments.add(
         AdminInternalAttachment(
           name: safeName,
           url: await ref.getDownloadURL(),
-          mimeType: item.mimeType?.trim().isNotEmpty == true
-              ? item.mimeType!.trim()
-              : 'application/octet-stream',
+          mimeType: mimeType,
         ),
       );
     }
     return attachments;
+  }
+
+  static String _guessMimeType(String fileName) {
+    final lower = fileName.toLowerCase();
+    if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) {
+      return 'image/jpeg';
+    }
+    if (lower.endsWith('.png')) {
+      return 'image/png';
+    }
+    if (lower.endsWith('.pdf')) {
+      return 'application/pdf';
+    }
+    return 'application/octet-stream';
   }
 
   static Future<AdminPeerProfile?> fetchPeerProfile(String uid) async {

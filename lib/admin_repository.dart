@@ -7,22 +7,26 @@ import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/foundation.dart';
 
 import 'data/catalog_taxonomy.dart';
+import 'models/admin_capability.dart';
 import 'models/admin_claim_request.dart';
+import 'models/admin_session.dart';
 import 'models/home_page_lock_config.dart';
 import 'models/home_quick_action_config.dart';
 import 'models/home_shelves_config.dart';
+import 'models/admin_work_task.dart';
+import 'services/admin_activity_log.dart';
+import 'services/admin_branch_query.dart';
+import 'services/admin_order_query.dart';
 import 'utils/guarded_functions.dart';
 
-class AdminAccessCheck {
+class AdminAccessCheck extends AdminSession {
   const AdminAccessCheck({
-    required this.allowed,
-    this.reason,
-    this.email,
+    required super.allowed,
+    super.reason,
+    super.email,
+    super.role,
+    super.assignedBranchId,
   });
-
-  final bool allowed;
-  final String? reason;
-  final String? email;
 }
 
 class AdminRepository {
@@ -43,13 +47,12 @@ class AdminRepository {
 
   static String? get _adminUid => FirebaseAuth.instance.currentUser?.uid;
 
-  static Future<AdminAccessCheck> checkAdminAccess() async {
+  static Future<AdminSession> checkAdminAccess() async {
     final user = FirebaseAuth.instance.currentUser;
     final email = user?.email?.trim().toLowerCase();
     if (email == null || email.isEmpty) {
-      return const AdminAccessCheck(
-        allowed: false,
-        reason: 'บัญชีนี้ไม่มีอีเมล — ใช้การล็อกอินด้วยอีเมล/รหัสผ่าน',
+      return AdminSession.denied(
+        'บัญชีนี้ไม่มีอีเมล — ใช้การล็อกอินด้วยอีเมล/รหัสผ่าน',
       );
     }
 
@@ -63,50 +66,65 @@ class AdminRepository {
         final doc =
             await _firestore.collection(adminCollection).doc(email).get();
         if (!doc.exists) {
-          return AdminAccessCheck(
-            allowed: false,
-            reason: 'ไม่พบ admins/$email ใน Firestore',
+          return AdminSession.denied(
+            'ไม่พบ admins/$email ใน Firestore',
             email: email,
           );
         }
 
         final data = doc.data();
         if (data == null || data['active'] == false) {
-          return AdminAccessCheck(
-            allowed: false,
-            reason: 'บัญชีแอดมินถูกปิดใช้งาน (active = false)',
+          return AdminSession.denied(
+            'บัญชีแอดมินถูกปิดใช้งาน (active = false)',
             email: email,
           );
         }
 
-        return AdminAccessCheck(allowed: true, email: email);
+        final role = AdminSession.parseRole(data['role']?.toString());
+        final branchRaw = data['branchId']?.toString().trim();
+        final branchId = branchRaw != null && branchRaw.isNotEmpty ? branchRaw : null;
+        if (role != AdminRole.owner && branchId == null) {
+          return AdminSession.denied(
+            'บัญชี ${role == AdminRole.staffAdmin ? 'staff_admin' : 'branch_admin'} ต้องมี branchId ใน admins/$email',
+            email: email,
+          );
+        }
+
+        final hasExplicitCaps = data.containsKey('allowedCaps');
+        final session = AdminSession(
+          allowed: true,
+          email: email,
+          role: role,
+          assignedBranchId: branchId,
+          allowedCaps: AdminCapability.parse(data['allowedCaps']),
+          hasExplicitCaps: hasExplicitCaps,
+        );
+        AdminSessionService.instance.setSession(session);
+        return session;
       } on FirebaseException catch (error) {
         lastError = error;
         final message = error.message ?? '';
         final isChannelError = message.contains('Unable to establish connection') ||
             message.contains('channel');
         if (!isChannelError || attempt == 2) {
-          return AdminAccessCheck(
-            allowed: false,
-            reason: 'อ่าน Firestore ไม่ได้: ${error.code} — $message',
+          return AdminSession.denied(
+            'อ่าน Firestore ไม่ได้: ${error.code} — $message',
             email: email,
           );
         }
       } catch (error) {
         lastError = error;
         if (attempt == 2) {
-          return AdminAccessCheck(
-            allowed: false,
-            reason: 'ตรวจสอบสิทธิ์ไม่สำเร็จ: $error',
+          return AdminSession.denied(
+            'ตรวจสอบสิทธิ์ไม่สำเร็จ: $error',
             email: email,
           );
         }
       }
     }
 
-    return AdminAccessCheck(
-      allowed: false,
-      reason: 'ตรวจสอบสิทธิ์ไม่สำเร็จ: $lastError',
+    return AdminSession.denied(
+      'ตรวจสอบสิทธิ์ไม่สำเร็จ: $lastError',
       email: email,
     );
   }
@@ -118,7 +136,7 @@ class AdminRepository {
 
   static Stream<List<AdminShopRecord>> streamShops() {
     final streams = shopCollections
-        .map((collection) => _firestore.collection(collection).snapshots())
+        .map((collection) => AdminBranchQuery.snapshots(collection))
         .toList(growable: false);
 
     return Stream<List<AdminShopRecord>>.multi((controller) {
@@ -172,7 +190,7 @@ class AdminRepository {
   }
 
   static Stream<List<AdminRiderRecord>> streamRiders() {
-    return _firestore.collection('riders').snapshots().map((snapshot) {
+    return AdminBranchQuery.snapshots('riders').map((snapshot) {
       final riders = snapshot.docs.map(AdminRiderRecord.fromSnapshot).toList(growable: false);
       return riders..sort((left, right) => left.displayName.compareTo(right.displayName));
     });
@@ -196,10 +214,7 @@ class AdminRepository {
   }
 
   static Stream<List<AdminOrderRecord>> streamOrders({int limit = 300}) {
-    return _firestore
-        .collection('orders')
-        .orderBy('createdAt', descending: true)
-        .limit(limit)
+    return AdminOrderQuery.orderByCreatedAtDesc(limit: limit)
         .snapshots()
         .map((snapshot) => snapshot.docs.map(AdminOrderRecord.fromSnapshot).toList(growable: false));
   }
@@ -207,12 +222,7 @@ class AdminRepository {
   static Future<List<AdminOrderRecord>> fetchOrdersForDate(DateTime date) async {
     final start = DateTime(date.year, date.month, date.day);
     final end = start.add(const Duration(days: 1));
-    final snapshot = await _firestore
-        .collection('orders')
-        .where('createdAt', isGreaterThanOrEqualTo: Timestamp.fromDate(start))
-        .where('createdAt', isLessThan: Timestamp.fromDate(end))
-        .orderBy('createdAt', descending: true)
-        .get();
+    final snapshot = await AdminOrderQuery.todayOrders(start, end).get();
 
     return snapshot.docs.map(AdminOrderRecord.fromSnapshot).toList(growable: false);
   }
@@ -318,6 +328,14 @@ class AdminRepository {
     batch.update(docRef, <String, dynamic>{
       'status': 'approved',
       'isProfileCompleted': true,
+      'adminSuspended': false,
+      'adminSuspendReason': FieldValue.delete(),
+      'adminSuspendedAt': FieldValue.delete(),
+      'adminSuspendedBy': FieldValue.delete(),
+      'documentReviewStatus': 'approved',
+      'documentResubmitReason': FieldValue.delete(),
+      'documentResubmitFields': FieldValue.delete(),
+      'documentResubmitContractFields': FieldValue.delete(),
       'adminApprovedAt': FieldValue.serverTimestamp(),
       'adminApprovedBy': adminUid,
       'updatedAt': FieldValue.serverTimestamp(),
@@ -347,6 +365,76 @@ class AdminRepository {
       body: 'ร้าน ${shop.displayName} พร้อมเปิดขายบนแอปลูกค้าแล้ว',
       action: 'shop_approved',
     );
+    unawaited(
+      AdminActivityLog.logWrite(
+        targetType: AdminWorkSourceType.shopApproval,
+        targetId: shop.id,
+        labelTh: 'อนุมัติร้าน ${shop.displayName}',
+      ),
+    );
+  }
+
+  static Future<void> setShopSuspended({
+    required AdminShopRecord shop,
+    required String adminUid,
+    required bool suspended,
+    String? reason,
+  }) async {
+    if (!shop.isApproved) {
+      throw StateError('ระงับได้เฉพาะร้านที่อนุมัติแล้ว');
+    }
+
+    final batch = _firestore.batch();
+    final registrationRef = _firestore.collection(shop.collection).doc(shop.id);
+    final publicRef = _firestore.collection('public_shops').doc(shop.ownerId);
+
+    final registrationUpdate = <String, dynamic>{
+      'adminSuspended': suspended,
+      'updatedAt': FieldValue.serverTimestamp(),
+    };
+    if (suspended) {
+      registrationUpdate['adminSuspendedAt'] = FieldValue.serverTimestamp();
+      registrationUpdate['adminSuspendedBy'] = adminUid;
+      if (reason != null && reason.trim().isNotEmpty) {
+        registrationUpdate['adminSuspendReason'] = reason.trim();
+      }
+    } else {
+      registrationUpdate['adminSuspendedAt'] = FieldValue.delete();
+      registrationUpdate['adminSuspendedBy'] = FieldValue.delete();
+      registrationUpdate['adminSuspendReason'] = FieldValue.delete();
+    }
+
+    batch.update(registrationRef, registrationUpdate);
+    batch.set(
+      publicRef,
+      <String, dynamic>{
+        'isActive': !suspended,
+        'updatedAt': FieldValue.serverTimestamp(),
+      },
+      SetOptions(merge: true),
+    );
+    await batch.commit();
+
+    await _notifyApp(
+      targetApp: 'van1',
+      recipientUid: shop.ownerId,
+      title: suspended ? 'ร้านถูกระงับชั่วคราว' : 'เปิดร้านอีกครั้งแล้ว',
+      body: suspended
+          ? (reason?.trim().isNotEmpty == true
+              ? reason!.trim()
+              : 'ร้าน ${shop.displayName} ถูกซ่อนจากแอปลูกค้า — ติดต่อแอดมิน')
+          : 'ร้าน ${shop.displayName} กลับมาแสดงบนแอปลูกค้าแล้ว',
+      action: suspended ? 'shop_suspended' : 'shop_unsuspended',
+    );
+    unawaited(
+      AdminActivityLog.logWrite(
+        targetType: AdminWorkSourceType.shopApproval,
+        targetId: shop.id,
+        labelTh: suspended
+            ? 'ระงับร้าน ${shop.displayName}'
+            : 'เปิดร้าน ${shop.displayName} อีกครั้ง',
+      ),
+    );
   }
 
   static Future<void> rejectShop({
@@ -357,6 +445,9 @@ class AdminRepository {
     await _firestore.collection(shop.collection).doc(shop.id).update(<String, dynamic>{
       'status': 'rejected',
       'rejectionReason': reason.trim(),
+      'documentReviewStatus': FieldValue.delete(),
+      'documentResubmitReason': FieldValue.delete(),
+      'documentResubmitFields': FieldValue.delete(),
       'adminRejectedAt': FieldValue.serverTimestamp(),
       'adminRejectedBy': adminUid,
       'updatedAt': FieldValue.serverTimestamp(),
@@ -368,6 +459,149 @@ class AdminRepository {
       title: 'ร้านไม่ผ่านการอนุมัติ',
       body: reason.trim().isEmpty ? 'กรุณาติดต่อแอดมินเพื่อแก้ไขข้อมูล' : reason.trim(),
       action: 'shop_rejected',
+    );
+    unawaited(
+      AdminActivityLog.logWrite(
+        targetType: AdminWorkSourceType.shopApproval,
+        targetId: shop.id,
+        labelTh: 'ปฏิเสธร้าน ${shop.displayName}',
+      ),
+    );
+  }
+
+  static Future<Map<String, dynamic>> fetchShopRegistrationBundle({
+    required AdminShopRecord shop,
+  }) async {
+    final registrationSnap =
+        await _firestore.collection(shop.collection).doc(shop.id).get();
+    final contractSnap =
+        await _firestore.collection('contracts').doc(shop.ownerId).get();
+    return <String, dynamic>{
+      'registration': registrationSnap.data() ?? <String, dynamic>{},
+      'contract': contractSnap.data() ?? <String, dynamic>{},
+    };
+  }
+
+  static Future<Map<String, dynamic>> fetchRiderRegistrationBundle(String riderId) async {
+    final registrationSnap =
+        await _firestore.collection('rider_registrations').doc(riderId).get();
+    final riderSnap = await _firestore.collection('riders').doc(riderId).get();
+    return <String, dynamic>{
+      'registration': registrationSnap.data() ?? <String, dynamic>{},
+      'rider': riderSnap.data() ?? <String, dynamic>{},
+    };
+  }
+
+  static Future<void> requestShopDocumentResubmit({
+    required AdminShopRecord shop,
+    required String adminUid,
+    required List<String> fieldKeys,
+    required String reason,
+  }) async {
+    final trimmedReason = reason.trim();
+    if (trimmedReason.isEmpty) {
+      throw ArgumentError('ต้องระบุเหตุผล');
+    }
+    if (fieldKeys.isEmpty) {
+      throw ArgumentError('ต้องเลือกเอกสารอย่างน้อย 1 รายการ');
+    }
+
+    final registrationFields = <String>[];
+    final contractFields = <String>[];
+    for (final key in fieldKeys) {
+      if (key.startsWith('contract:')) {
+        contractFields.add(key.substring('contract:'.length));
+      } else {
+        registrationFields.add(key);
+      }
+    }
+
+    final batch = _firestore.batch();
+    final registrationRef = _firestore.collection(shop.collection).doc(shop.id);
+    batch.update(registrationRef, <String, dynamic>{
+      'status': 'pending',
+      'documentReviewStatus': 'resubmit_requested',
+      'documentResubmitReason': trimmedReason,
+      'documentResubmitFields': registrationFields,
+      if (contractFields.isNotEmpty) 'documentResubmitContractFields': contractFields,
+      'documentResubmitRequestedAt': FieldValue.serverTimestamp(),
+      'documentResubmitRequestedBy': adminUid,
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
+
+    if (contractFields.isNotEmpty) {
+      batch.set(
+        _firestore.collection('contracts').doc(shop.ownerId),
+        <String, dynamic>{
+          'documentReviewStatus': 'resubmit_requested',
+          'documentResubmitReason': trimmedReason,
+          'documentResubmitFields': contractFields,
+          'documentResubmitRequestedAt': FieldValue.serverTimestamp(),
+          'documentResubmitRequestedBy': adminUid,
+          'updatedAt': FieldValue.serverTimestamp(),
+        },
+        SetOptions(merge: true),
+      );
+    }
+
+    await batch.commit();
+
+    await _notifyApp(
+      targetApp: 'van1',
+      recipientUid: shop.ownerId,
+      title: 'กรุณาส่งเอกสารใหม่',
+      body: trimmedReason,
+      action: 'shop_documents_resubmit',
+    );
+    unawaited(
+      AdminActivityLog.logWrite(
+        targetType: AdminWorkSourceType.shopApproval,
+        targetId: shop.id,
+        labelTh: 'ขอเอกสารใหม่ร้าน ${shop.displayName}',
+      ),
+    );
+  }
+
+  static Future<void> requestRiderDocumentResubmit({
+    required String riderId,
+    required String adminUid,
+    required List<String> fieldKeys,
+    required String reason,
+  }) async {
+    final trimmedReason = reason.trim();
+    if (trimmedReason.isEmpty) {
+      throw ArgumentError('ต้องระบุเหตุผล');
+    }
+    if (fieldKeys.isEmpty) {
+      throw ArgumentError('ต้องเลือกเอกสารอย่างน้อย 1 รายการ');
+    }
+
+    final payload = <String, dynamic>{
+      'registrationStatus': 'pending',
+      'documentReviewStatus': 'resubmit_requested',
+      'documentResubmitReason': trimmedReason,
+      'documentResubmitFields': fieldKeys,
+      'documentResubmitRequestedAt': FieldValue.serverTimestamp(),
+      'documentResubmitRequestedBy': adminUid,
+      'onlineReady': false,
+      'updatedAt': FieldValue.serverTimestamp(),
+    };
+
+    final batch = _firestore.batch();
+    batch.set(_firestore.collection('riders').doc(riderId), payload, SetOptions(merge: true));
+    batch.set(
+      _firestore.collection('rider_registrations').doc(riderId),
+      payload,
+      SetOptions(merge: true),
+    );
+    await batch.commit();
+
+    await _notifyApp(
+      targetApp: 'van3',
+      recipientUid: riderId,
+      title: 'กรุณาส่งเอกสารใหม่',
+      body: trimmedReason,
+      action: 'rider_documents_resubmit',
     );
   }
 
@@ -421,6 +655,9 @@ class AdminRepository {
     if (status == 'approved') {
       payload['onlineReady'] = true;
       payload['adminSuspended'] = false;
+      payload['documentReviewStatus'] = 'approved';
+      payload['documentResubmitReason'] = FieldValue.delete();
+      payload['documentResubmitFields'] = FieldValue.delete();
     } else if (status == 'rejected') {
       payload['onlineReady'] = false;
       payload['adminSuspended'] = true;
@@ -864,6 +1101,15 @@ class AdminRepository {
       'publishedProductId': productRef.id,
       'updatedAt': FieldValue.serverTimestamp(),
     }, SetOptions(merge: true));
+
+    final productName = raw['name']?.toString() ?? reviewId;
+    unawaited(
+      AdminActivityLog.logWrite(
+        targetType: AdminWorkSourceType.productReview,
+        targetId: reviewId,
+        labelTh: 'อนุมัติสินค้า $productName',
+      ),
+    );
   }
 
   static Future<void> rejectProductReview({
@@ -887,6 +1133,14 @@ class AdminRepository {
       if (reason != null && reason.trim().isNotEmpty) 'rejectReason': reason.trim(),
       'updatedAt': FieldValue.serverTimestamp(),
     }, SetOptions(merge: true));
+
+    unawaited(
+      AdminActivityLog.logWrite(
+        targetType: AdminWorkSourceType.productReview,
+        targetId: reviewId,
+        labelTh: 'ปฏิเสธสินค้ารอตรวจ $reviewId',
+      ),
+    );
   }
 
   static Future<AdminPendingReviewDraft> fetchPendingProductReviewDraft(
@@ -1654,6 +1908,9 @@ class AdminShopRecord {
     required this.createdAt,
     required this.address,
     required this.isProfileCompleted,
+    this.branchId,
+    this.adminSuspended = false,
+    this.adminSuspendReason,
   });
 
   final String id;
@@ -1668,6 +1925,9 @@ class AdminShopRecord {
   final DateTime? createdAt;
   final String? address;
   final bool isProfileCompleted;
+  final String? branchId;
+  final bool adminSuspended;
+  final String? adminSuspendReason;
 
   bool get isPendingReview {
     final normalized = status.toLowerCase();
@@ -1696,6 +1956,9 @@ class AdminShopRecord {
       createdAt: _toDateTime(data['createdAt']) ?? _toDateTime(data['updatedAt']),
       address: _firstString(data, const <String>['address']),
       isProfileCompleted: data['isProfileCompleted'] == true,
+      branchId: _firstString(data, const <String>['branchId', 'marketId']),
+      adminSuspended: data['adminSuspended'] == true,
+      adminSuspendReason: _firstString(data, const <String>['adminSuspendReason']),
     );
   }
 }
@@ -1713,6 +1976,8 @@ class AdminRiderRecord {
     this.bankName,
     this.accountNumber,
     this.accountName,
+    this.marketId,
+    this.branchId,
   });
 
   final String id;
@@ -1726,6 +1991,8 @@ class AdminRiderRecord {
   final String? bankName;
   final String? accountNumber;
   final String? accountName;
+  final String? marketId;
+  final String? branchId;
 
   factory AdminRiderRecord.fromSnapshot(QueryDocumentSnapshot<Map<String, dynamic>> doc) {
     final data = doc.data();
@@ -1741,6 +2008,8 @@ class AdminRiderRecord {
       bankName: _firstString(data, const <String>['bankName']),
       accountNumber: _firstString(data, const <String>['accountNumber']),
       accountName: _firstString(data, const <String>['accountName', 'accountOwner']),
+      marketId: _firstString(data, const <String>['marketId']),
+      branchId: _firstString(data, const <String>['branchId']),
     );
   }
 }
@@ -2542,6 +2811,14 @@ extension AdminRepositorySupport on AdminRepository {
     );
 
     await batch.commit();
+
+    unawaited(
+      AdminActivityLog.logWrite(
+        targetType: AdminWorkSourceType.supportTicket,
+        targetId: ticket.id,
+        labelTh: 'ตอบแชท: ${ticket.topicLabel}',
+      ),
+    );
   }
 
   static Future<void> closeSupportTicket({
@@ -2641,6 +2918,14 @@ extension AdminRepositorySupport on AdminRepository {
     );
 
     await batch.commit();
+
+    unawaited(
+      AdminActivityLog.logWrite(
+        targetType: AdminWorkSourceType.supportTicket,
+        targetId: ticket.id,
+        labelTh: 'ปิดเคส: ${ticket.topicLabel}',
+      ),
+    );
   }
 
   static List<Map<String, dynamic>> _buildSupportQaPairs({

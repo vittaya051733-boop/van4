@@ -7,8 +7,10 @@ import 'admin_claim_screen.dart';
 import 'admin_image_widgets.dart';
 import 'admin_repository.dart';
 import 'models/admin_claim_request.dart';
+import 'models/admin_work_task.dart';
 import 'utils/admin_support_call_launcher.dart';
 import 'widgets/admin_order_contact_actions.dart';
+import 'widgets/admin_work_claim_bar.dart';
 
 class AdminSupportInboxScreen extends StatefulWidget {
   const AdminSupportInboxScreen({super.key});
@@ -362,6 +364,11 @@ class _AdminSupportTicketDetailScreenState
                       sourceLabel: ticket.sourceLabel,
                       sourceApp: ticket.sourceApp,
                       status: _status,
+                    ),
+                    AdminWorkClaimBar(
+                      sourceType: AdminWorkSourceType.supportTicket,
+                      sourceId: ticket.id,
+                      title: ticket.topicLabel,
                     ),
                     const SizedBox(height: 12),
                     Text(
@@ -801,6 +808,11 @@ class AdminSupportTicketTile extends StatelessWidget {
                           ),
                         ),
                       ),
+                    AdminWorkClaimBar(
+                      sourceType: AdminWorkSourceType.supportTicket,
+                      sourceId: ticket.id,
+                      title: ticket.topicLabel,
+                    ),
                   ],
                 ),
               ),

@@ -1,28 +1,83 @@
+import 'dart:async';
+
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
 import 'admin_announcement_screen.dart';
 import 'admin_catalog_review_screen.dart';
+import 'admin_alert_center_screen.dart';
 import 'admin_claim_screen.dart';
 import 'admin_credit_hub_screen.dart';
+import 'admin_dispute_hub_screen.dart';
 import 'admin_ecosystem_health_screen.dart';
+import 'admin_financial_audit_screen.dart';
 import 'admin_home_shelves_screen.dart';
+import 'admin_kyc_center_screen.dart';
+import 'admin_live_operation_screen.dart';
+import 'admin_market_management_screen.dart';
+import 'admin_ops_report_screen.dart';
 import 'admin_pricing_config_screen.dart';
 import 'admin_project_finance_screen.dart';
+import 'admin_tax_hub_screen.dart';
 import 'admin_promotions_screen.dart';
 import 'admin_image_widgets.dart';
 import 'admin_order_support.dart';
 import 'admin_payout_screens.dart';
 import 'admin_withdraw_queue_screen.dart';
 import 'admin_repository.dart';
+import 'admin_registration_review_screen.dart';
 import 'admin_shop_screens.dart';
 import 'admin_support_screens.dart';
 import 'admin_social_dashboard_screen.dart';
 import 'widgets/admin_order_contact_actions.dart';
 import 'admin_work_inbox_screen.dart';
-import 'admin_notifications_tab.dart';
+import 'admin_work_log_screen.dart';
 import 'admin_settings_tab.dart';
+import 'admin_team_permissions_screen.dart';
+import 'models/admin_alert_item.dart';
+import 'models/admin_alert_topic.dart';
+import 'models/admin_capability.dart';
+import 'models/admin_session.dart';
+import 'services/admin_activity_log.dart';
+import 'services/admin_alert_center_service.dart';
+import 'services/admin_alert_preferences_service.dart';
 import 'services/ecosystem_health_service.dart';
+import 'widgets/admin_market_selector.dart';
+import 'widgets/admin_overview_dashboard.dart';
+
+class CapabilityGate extends StatelessWidget {
+  const CapabilityGate({
+    super.key,
+    required this.capability,
+    required this.child,
+  });
+
+  final String capability;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    if (!AdminSessionService.instance.hasCap(capability)) {
+      return const SizedBox.shrink();
+    }
+    return child;
+  }
+}
+
+/// Legacy: owner-only. Prefer [CapabilityGate].
+class SuperAdminOnly extends StatelessWidget {
+  const SuperAdminOnly({super.key, required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    if (!AdminSessionService.instance.isOwner) {
+      return const SizedBox.shrink();
+    }
+    return child;
+  }
+}
 
 class AdminHomeScreen extends StatefulWidget {
   const AdminHomeScreen({super.key, required this.user});
@@ -36,11 +91,39 @@ class AdminHomeScreen extends StatefulWidget {
 class _AdminHomeScreenState extends State<AdminHomeScreen> {
   int _tabIndex = 0;
 
+  @override
+  void initState() {
+    super.initState();
+    unawaited(AdminAlertPreferencesService.instance.ensureLoaded());
+  }
+
+  void _openWorkInboxTab() {
+    setState(() => _tabIndex = 3);
+  }
+
+  void _openLiveTab() {
+    setState(() => _tabIndex = 1);
+  }
+
+  void _openAlertTab() {
+    setState(() => _tabIndex = 2);
+  }
+
+  void _openOrderDetail(BuildContext context, AdminOrderRecord order) {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => AdminOrderDetailScreen(order: order),
+      ),
+    );
+  }
+
   String get _appBarTitle {
     return switch (_tabIndex) {
-      1 => 'งานแอดมิน',
-      2 => 'แจ้งเตือน',
-      3 => 'ตั้งค่า',
+      0 => 'ภาพรวม',
+      1 => 'งานสด',
+      2 => 'ปัญหา',
+      3 => 'งานแอดมิน',
+      4 => 'ตั้งค่า',
       _ => 'Van Market Admin',
     };
   }
@@ -54,6 +137,7 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
         foregroundColor: Colors.white,
         title: Text(_appBarTitle),
         actions: <Widget>[
+          const AdminMarketSelector(),
           IconButton(
             onPressed: () => FirebaseAuth.instance.signOut(),
             icon: const Icon(Icons.logout_rounded),
@@ -64,51 +148,89 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
       body: IndexedStack(
         index: _tabIndex,
         children: <Widget>[
-          AdminHomeMenuBody(user: widget.user),
-          AdminWorkInboxScreen(embedded: true, openChatTab: _tabIndex == 1),
-          const AdminNotificationsTab(),
+          AdminHomeMenuBody(
+            user: widget.user,
+            onOpenWorkInboxTab: _openWorkInboxTab,
+            onOpenLiveTab: _openLiveTab,
+            onOpenAlertTab: _openAlertTab,
+          ),
+          AdminLiveOperationScreen(
+            embedded: true,
+            onOpenOrder: _openOrderDetail,
+          ),
+          AdminAlertCenterScreen(
+            embedded: true,
+            onOpenWorkInboxTab: _openWorkInboxTab,
+            onOpenOrder: _openOrderDetail,
+          ),
+          AdminWorkInboxScreen(embedded: true, openChatTab: _tabIndex == 3),
           AdminSettingsTab(user: widget.user),
         ],
       ),
-      bottomNavigationBar: StreamBuilder<AdminWorkInboxSnapshot>(
-        stream: AdminRepositoryWorkInbox.streamWorkInbox(),
-        builder: (context, snapshot) {
-          final badgeCount = snapshot.data?.attentionCount ?? 0;
-          return NavigationBar(
-            selectedIndex: _tabIndex,
-            onDestinationSelected: (index) => setState(() => _tabIndex = index),
-            backgroundColor: Colors.white,
-            indicatorColor: const Color(0xFFFFE0B2),
-            destinations: <NavigationDestination>[
-              const NavigationDestination(
-                icon: Icon(Icons.home_outlined),
-                selectedIcon: Icon(Icons.home_rounded),
-                label: 'โฮม',
-              ),
-              NavigationDestination(
-                icon: Badge(
-                  isLabelVisible: badgeCount > 0,
-                  label: Text('$badgeCount'),
-                  child: const Icon(Icons.chat_bubble_outline_rounded),
-                ),
-                selectedIcon: Badge(
-                  isLabelVisible: badgeCount > 0,
-                  label: Text('$badgeCount'),
-                  child: const Icon(Icons.chat_bubble_rounded),
-                ),
-                label: 'แชท',
-              ),
-              const NavigationDestination(
-                icon: Icon(Icons.notifications_outlined),
-                selectedIcon: Icon(Icons.notifications_rounded),
-                label: 'แจ้งเตือน',
-              ),
-              const NavigationDestination(
-                icon: Icon(Icons.settings_outlined),
-                selectedIcon: Icon(Icons.settings_rounded),
-                label: 'ตั้งค่า',
-              ),
-            ],
+      bottomNavigationBar: ListenableBuilder(
+        listenable: AdminAlertPreferencesService.instance,
+        builder: (context, _) {
+          return StreamBuilder<AdminAlertCenterSnapshot>(
+            stream: AdminAlertCenterService.instance.streamAlerts(),
+            builder: (context, alertSnapshot) {
+              final focusedTypes = AdminAlertPreferencesService.instance.focusedTypes;
+              final alertCount = alertSnapshot.data?.focusedCount(focusedTypes) ?? 0;
+              return StreamBuilder<AdminWorkInboxSnapshot>(
+                stream: AdminRepositoryWorkInbox.streamWorkInbox(),
+                builder: (context, inboxSnapshot) {
+                  final chatBadgeCount = inboxSnapshot.data?.attentionCount ?? 0;
+                  return NavigationBar(
+                    selectedIndex: _tabIndex,
+                    onDestinationSelected: (index) => setState(() => _tabIndex = index),
+                    backgroundColor: Colors.white,
+                    indicatorColor: const Color(0xFFFFE0B2),
+                    destinations: <NavigationDestination>[
+                      const NavigationDestination(
+                        icon: Icon(Icons.dashboard_outlined),
+                        selectedIcon: Icon(Icons.dashboard_rounded),
+                        label: 'ภาพรวม',
+                      ),
+                      const NavigationDestination(
+                        icon: Icon(Icons.local_shipping_outlined),
+                        selectedIcon: Icon(Icons.local_shipping_rounded),
+                        label: 'งานสด',
+                      ),
+                      NavigationDestination(
+                        icon: Badge(
+                          isLabelVisible: alertCount > 0,
+                          label: Text('$alertCount'),
+                          child: const Icon(Icons.notification_important_outlined),
+                        ),
+                        selectedIcon: Badge(
+                          isLabelVisible: alertCount > 0,
+                          label: Text('$alertCount'),
+                          child: const Icon(Icons.notification_important_rounded),
+                        ),
+                        label: 'ปัญหา',
+                      ),
+                      NavigationDestination(
+                        icon: Badge(
+                          isLabelVisible: chatBadgeCount > 0,
+                          label: Text('$chatBadgeCount'),
+                          child: const Icon(Icons.chat_bubble_outline_rounded),
+                        ),
+                        selectedIcon: Badge(
+                          isLabelVisible: chatBadgeCount > 0,
+                          label: Text('$chatBadgeCount'),
+                          child: const Icon(Icons.chat_bubble_rounded),
+                        ),
+                        label: 'แชท',
+                      ),
+                      const NavigationDestination(
+                        icon: Icon(Icons.settings_outlined),
+                        selectedIcon: Icon(Icons.settings_rounded),
+                        label: 'ตั้งค่า',
+                      ),
+                    ],
+                  );
+                },
+              );
+            },
           );
         },
       ),
@@ -117,257 +239,405 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
 }
 
 class AdminHomeMenuBody extends StatelessWidget {
-  const AdminHomeMenuBody({super.key, required this.user});
+  const AdminHomeMenuBody({
+    super.key,
+    required this.user,
+    required this.onOpenWorkInboxTab,
+    required this.onOpenLiveTab,
+    required this.onOpenAlertTab,
+  });
 
   final User user;
+  final VoidCallback onOpenWorkInboxTab;
+  final VoidCallback onOpenLiveTab;
+  final VoidCallback onOpenAlertTab;
 
   @override
   Widget build(BuildContext context) {
     return ListView(
       padding: const EdgeInsets.all(20),
       children: <Widget>[
-        Container(
-          padding: const EdgeInsets.all(20),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(24),
-            boxShadow: const <BoxShadow>[
-              BoxShadow(color: Color(0x14000000), blurRadius: 18, offset: Offset(0, 8)),
-            ],
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: <Widget>[
-              Text(
-                'ศูนย์ควบคุมแอดมินแว๊นตลาด',
-                style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                      fontWeight: FontWeight.w800,
-                      color: const Color(0xFF9A3412),
-                    ),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                user.email ?? user.uid,
-                style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                      color: const Color(0xFF7C2D12),
-                      height: 1.5,
-                    ),
-              ),
-              const SizedBox(height: 12),
-              Text(
-                'เชื่อมโยง van1 (ร้าน) → van2 (ลูกค้า) → van3 (ไรเดอร์) ผ่าน Firestore ร่วม orders + app_notifications',
-                style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      color: const Color(0xFF6B7280),
-                      height: 1.4,
-                    ),
-              ),
-            ],
+        CapabilityGate(
+          capability: AdminCapability.overview,
+          child: AdminOverviewDashboard(
+            onOpenWorkInboxTab: onOpenWorkInboxTab,
+            onOpenLiveTab: onOpenLiveTab,
+            onOpenAlertTab: onOpenAlertTab,
           ),
         ),
-        const SizedBox(height: 18),
-        ListenableBuilder(
-          listenable: EcosystemHealthService.instance,
-          builder: (context, _) {
-            final counts = EcosystemHealthService.instance.counts();
-            final fail = counts.fail;
-            return _AdminPrimaryButton(
-              icon: Icons.monitor_heart_outlined,
-              title: fail > 0
-                  ? 'สุขภาพระบบ — แดง $fail จุด'
-                  : 'สุขภาพระบบ / จุดเชื่อม Firebase',
-              subtitle:
-                  'รวม ${counts.total} จุด · เขียว ${counts.ok} · แดง ${counts.fail} · ยังไม่ตรวจ ${counts.unknown}',
-              onTap: () => Navigator.of(context).push(
-                MaterialPageRoute<void>(
-                  builder: (_) => const AdminEcosystemHealthScreen(),
-                ),
-              ),
-            );
-          },
-        ),
-        const SizedBox(height: 18),
+        const SizedBox(height: 24),
         Text(
-          'เมนูหลัก',
+          'เครื่องมือจัดการ',
           style: Theme.of(context).textTheme.titleLarge?.copyWith(
                 fontWeight: FontWeight.w800,
                 color: const Color(0xFF9A3412),
               ),
         ),
         const SizedBox(height: 12),
+        if (AdminSessionService.instance.canDelegate) ...<Widget>[
+          _AdminPrimaryButton(
+            icon: Icons.manage_accounts_outlined,
+            title: 'สิทธิ์ทีมแอดมิน',
+            subtitle: AdminSessionService.instance.isOwner
+                ? 'ติ๊กหัวข้องานให้ผู้จัดการสาขา และสร้างแอดมิน'
+                : 'ติ๊กหัวข้องานให้แอดมินในสาขาตัวเอง',
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(
+                builder: (_) => const AdminTeamPermissionsScreen(),
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+        ],
         _AdminPrimaryButton(
-          icon: Icons.account_balance_wallet_outlined,
-          title: 'บัญชีโปรเจกต / ROI',
-          subtitle: 'อัปโหลดใบเสร็จรายจ่าย • ตั้งเงินลงทุน • คำนวณ ROI จากยอดขายและสินค้า',
+          icon: Icons.assignment_turned_in_outlined,
+          title: 'บันทึกงาน',
+          subtitle: AdminSessionService.instance.isOwner
+              ? 'งานที่รับ / ไทม์ไลน์ทุกสาขา'
+              : 'งานที่รับและบันทึกในสาขาตัวเอง',
           onTap: () => Navigator.of(context).push(
             MaterialPageRoute<void>(
-              builder: (_) => const AdminProjectFinanceScreen(),
+              builder: (_) => const AdminWorkLogScreen(),
             ),
           ),
         ),
         const SizedBox(height: 12),
-        _AdminPrimaryButton(
-          icon: Icons.receipt_long_outlined,
-          title: 'จัดการออเดอร์',
-          subtitle: 'แยกสำเร็จ/ไม่สำเร็จ/ยกเลิก/ขอคืนเงิน + CSV 4 ฝ่าย 18:00',
-          onTap: () => Navigator.of(context).push(
-            MaterialPageRoute<void>(builder: (_) => const OrderManagementScreen()),
+        CapabilityGate(
+          capability: AdminCapability.ecosystemHealth,
+          child: ListenableBuilder(
+            listenable: EcosystemHealthService.instance,
+            builder: (context, _) {
+              final counts = EcosystemHealthService.instance.counts();
+              final fail = counts.fail;
+              return _AdminPrimaryButton(
+                icon: Icons.monitor_heart_outlined,
+                title: fail > 0
+                    ? 'สุขภาพระบบ — แดง $fail จุด'
+                    : 'สุขภาพระบบ / จุดเชื่อม Firebase',
+                subtitle:
+                    'รวม ${counts.total} จุด · เขียว ${counts.ok} · แดง ${counts.fail} · ยังไม่ตรวจ ${counts.unknown}',
+                onTap: () => Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => const AdminEcosystemHealthScreen(),
+                  ),
+                ),
+              );
+            },
           ),
         ),
-        const SizedBox(height: 12),
-        _AdminPrimaryButton(
-          icon: Icons.recommend_outlined,
-          title: 'หน้าแรก van2',
-          subtitle: 'เปิด/ปิดปุ่มทางลัด • สินค้าแนะนำบนหน้าแรก',
-          onTap: () => Navigator.of(context).push(
-            MaterialPageRoute<void>(
-              builder: (_) => const AdminHomeShelvesScreen(),
+        const SizedBox(height: 18),
+        Text(
+          'เมนูเครื่องมือ',
+          style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                fontWeight: FontWeight.w700,
+                color: const Color(0xFF7C2D12),
+              ),
+        ),
+        const SizedBox(height: 18),
+        CapabilityGate(
+          capability: AdminCapability.branches,
+          child: _AdminPrimaryButton(
+            icon: Icons.map_outlined,
+            title: 'จัดการสาขา',
+            subtitle: 'branches/central · ผูกร้าน/ไรเดอร์ · ดูยอดแยกสาขา',
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(
+                builder: (_) => const AdminMarketManagementScreen(),
+              ),
             ),
           ),
         ),
         const SizedBox(height: 12),
-        _AdminPrimaryButton(
-          icon: Icons.price_change_outlined,
-          title: 'ตั้งค่าราคาและค่าส่ง',
-          subtitle: 'อัตราบวกเพิ่มสินค้า ค่าส่งท้องถิ่น โดยสาร ส่งทั่วประเทศ — van2 ฟังค่านี้',
-          onTap: () => Navigator.of(context).push(
-            MaterialPageRoute<void>(
-              builder: (_) => const AdminPricingConfigScreen(),
+        KycCapabilityGate(
+          child: _AdminPrimaryButton(
+            icon: Icons.verified_user_outlined,
+            title: 'ศูนย์ยืนยันตัวตน (KYC)',
+            subtitle: 'บัตรประชาชน · อีเมล · PromptPay · ความพร้อมใบแจ้งยอด',
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(
+                builder: (_) => const AdminKycCenterScreen(),
+              ),
             ),
           ),
         ),
         const SizedBox(height: 12),
-        _AdminPrimaryButton(
-          icon: Icons.local_offer_outlined,
-          title: 'โปรโมชั่นและคูปอง',
-          subtitle: 'คูปองกดรับเอง (ป๊อปอัพ PNG) • โปรอัตโนมัติ • รูปแบบ UI van2',
-          onTap: () => Navigator.of(context).push(
-            MaterialPageRoute<void>(
-              builder: (_) => const AdminPromotionsScreen(),
+        DisputeCapabilityGate(
+          child: _AdminPrimaryButton(
+            icon: Icons.gavel_outlined,
+            title: 'ศูนย์ข้อพิพาท / เคลม',
+            subtitle: 'รวม ticket เคลม · สถานะ · ลิงก์ไปแก้เคลมออเดอร์',
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(
+                builder: (_) => const AdminDisputeHubScreen(),
+              ),
             ),
           ),
         ),
         const SizedBox(height: 12),
-        _AdminPrimaryButton(
-          icon: Icons.category_outlined,
-          title: 'จัดการหมวดสินค้า',
-          subtitle: 'สินค้า AI ไม่มั่นใจ • แก้หมวดผิด • เพิ่มหัวข้อใหม่',
-          onTap: () => Navigator.of(context).push(
-            MaterialPageRoute<void>(
-              builder: (_) => const AdminCatalogReviewScreen(),
+        OpsReportCapabilityGate(
+          child: _AdminPrimaryButton(
+            icon: Icons.analytics_outlined,
+            title: 'รายงาน Ops',
+            subtitle: 'ออเดอร์ค้าง · ร้านช้า · ร้านปิดมีงาน · Export CSV',
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(
+                builder: (_) => const AdminOpsReportScreen(),
+              ),
             ),
           ),
         ),
         const SizedBox(height: 12),
-        _AdminPrimaryButton(
-          icon: Icons.storefront_outlined,
-          title: 'จัดการร้านค้า',
-          subtitle: 'อนุมัติร้าน • สินค้ารอตรวจ (AI) • ช่วยอัปโหลด • ตั้งค่ารูป/วิดีโอ',
-          onTap: () => Navigator.of(context).push(
-            MaterialPageRoute<void>(builder: (_) => const ShopManagementScreen()),
-          ),
-        ),
-        const SizedBox(height: 12),
-        _AdminPrimaryButton(
-          icon: Icons.delivery_dining_outlined,
-          title: 'จัดการไรเดอร์',
-          subtitle: 'เปิด/ระงับความพร้อมรับงาน van3',
-          onTap: () => Navigator.of(context).push(
-            MaterialPageRoute<void>(builder: (_) => const RiderManagementScreen()),
-          ),
-        ),
-        const SizedBox(height: 12),
-        _AdminPrimaryButton(
-          icon: Icons.campaign_outlined,
-          title: 'ประกาศแจ้งเตือน',
-          subtitle: 'ส่งประกาศไปร้านค้า / ลูกค้า / ไรเดอร์ — แสดงที่ปุ่มแจ้งเตือน',
-          onTap: () => Navigator.of(context).push(
-            MaterialPageRoute<void>(
-              builder: (_) => const AdminAnnouncementScreen(),
+        FinancialAuditCapabilityGate(
+          child: _AdminPrimaryButton(
+            icon: Icons.receipt_long_outlined,
+            title: 'Audit การเงิน / ภาษี',
+            subtitle: 'บันทึกยืนยันถอน · ปิดงวด VAT · export ops',
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(
+                builder: (_) => const AdminFinancialAuditScreen(),
+              ),
             ),
           ),
         ),
         const SizedBox(height: 12),
-        _AdminPrimaryButton(
-          icon: Icons.inbox_outlined,
-          title: 'งานแอดมินรวม',
-          subtitle: 'สินค้ารอตรวจ • ลูกค้า • ร้านค้า • ไรเดอร์ — ดูที่แท็บแชทด้วย',
-          onTap: () => Navigator.of(context).push(
-            MaterialPageRoute<void>(
-              builder: (_) => const AdminWorkInboxScreen(),
+        TaxCapabilityGate(
+          child: _AdminPrimaryButton(
+            icon: Icons.account_balance_outlined,
+            title: 'ศูนย์ภาษีแพลตฟอร์ม',
+            subtitle: 'VAT รายเดือน · ภาษีเงินได้ · export CSV ให้บัญชี',
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(
+                builder: (_) => const AdminTaxHubScreen(),
+              ),
             ),
           ),
         ),
         const SizedBox(height: 12),
-        _AdminPrimaryButton(
-          icon: Icons.people_alt_outlined,
-          title: 'จัดการลูกค้า',
-          subtitle: 'ดู customer_users จาก van2',
-          onTap: () => Navigator.of(context).push(
-            MaterialPageRoute<void>(builder: (_) => const CustomerManagementScreen()),
-          ),
-        ),
-        const SizedBox(height: 12),
-        _AdminPrimaryButton(
-          icon: Icons.percent_rounded,
-          title: 'ตั้งค่าอัตราหัก',
-          subtitle: 'GP สินค้า / หักไรเดอร์ / ส่วนแบ่งไลด์เดอร์',
-          onTap: () => Navigator.of(context).push(
-            MaterialPageRoute<void>(
-              builder: (_) => const AdminSettlementFeeConfigScreen(),
+        CapabilityGate(
+          capability: AdminCapability.financeRoi,
+          child: _AdminPrimaryButton(
+            icon: Icons.account_balance_wallet_outlined,
+            title: 'บัญชีโปรเจกต / ROI',
+            subtitle: 'อัปโหลดใบเสร็จรายจ่าย • ตั้งเงินลงทุน • คำนวณ ROI จากยอดขายและสินค้า',
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(
+                builder: (_) => const AdminProjectFinanceScreen(),
+              ),
             ),
           ),
         ),
         const SizedBox(height: 12),
-        _AdminPrimaryButton(
-          icon: Icons.toll_outlined,
-          title: 'เครดิตระบบ',
-          subtitle: 'ดูยอด van1/van3 รวม · รายบุคคล · ปรับ ledger (+/-)',
-          onTap: () => Navigator.of(context).push(
-            MaterialPageRoute<void>(
-              builder: (_) => const AdminCreditHubScreen(),
+        CapabilityGate(
+          capability: AdminCapability.orders,
+          child: _AdminPrimaryButton(
+            icon: Icons.receipt_long_outlined,
+            title: 'จัดการออเดอร์',
+            subtitle: 'แยกสำเร็จ/ไม่สำเร็จ/ยกเลิก/ขอคืนเงิน + CSV 4 ฝ่าย 18:00',
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(builder: (_) => const OrderManagementScreen()),
             ),
           ),
         ),
         const SizedBox(height: 12),
-        _AdminPrimaryButton(
-          icon: Icons.payments_outlined,
-          title: 'คิวถอนเงิน',
-          subtitle: 'PromptPay / ธนาคาร · QR · CSV · ยืนยันสลิป',
-          onTap: () => Navigator.of(context).push(
-            MaterialPageRoute<void>(
-              builder: (_) => const AdminWithdrawQueueScreen(),
+        CapabilityGate(
+          capability: AdminCapability.homeShelves,
+          child: _AdminPrimaryButton(
+            icon: Icons.recommend_outlined,
+            title: 'หน้าแรก van2',
+            subtitle: 'เปิด/ปิดปุ่มทางลัด • สินค้าแนะนำบนหน้าแรก',
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(
+                builder: (_) => const AdminHomeShelvesScreen(),
+              ),
             ),
           ),
         ),
         const SizedBox(height: 12),
-        _AdminPrimaryButton(
-          icon: Icons.upload_file_outlined,
-          title: 'นำเข้า CSV ผลโอนเงิน',
-          subtitle: 'อัปเดตสถานะ paid/failed หลังโอนผ่านธนาคาร',
-          onTap: () => Navigator.of(context).push(
-            MaterialPageRoute<void>(
-              builder: (_) => const AdminPayoutImportScreen(),
+        CapabilityGate(
+          capability: AdminCapability.pricing,
+          child: _AdminPrimaryButton(
+            icon: Icons.price_change_outlined,
+            title: 'ตั้งค่าราคาและค่าส่ง',
+            subtitle: 'อัตราบวกเพิ่มสินค้า ค่าส่งท้องถิ่น โดยสาร ส่งทั่วประเทศ — van2 ฟังค่านี้',
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(
+                builder: (_) => const AdminPricingConfigScreen(),
+              ),
             ),
           ),
         ),
         const SizedBox(height: 12),
-        _AdminPrimaryButton(
-          icon: Icons.share_outlined,
-          title: 'โซเชียลแดชบอร์ด',
-          subtitle: 'อัปโหลดวิดีโอครั้งเดียว → FB/IG, YouTube, TikTok + กล่องคอมเมนต์',
-          onTap: () => Navigator.of(context).push(
-            MaterialPageRoute<void>(
-              builder: (_) => const AdminSocialDashboardScreen(),
+        CapabilityGate(
+          capability: AdminCapability.promotions,
+          child: _AdminPrimaryButton(
+            icon: Icons.local_offer_outlined,
+            title: 'โปรโมชั่นและคูปอง',
+            subtitle: 'คูปองกดรับเอง (ป๊อปอัพ PNG) • โปรอัตโนมัติ • รูปแบบ UI van2',
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(
+                builder: (_) => const AdminPromotionsScreen(),
+              ),
             ),
           ),
         ),
         const SizedBox(height: 12),
-        _AdminPrimaryButton(
-          icon: Icons.store_mall_directory_outlined,
-          title: 'ร้านค้า (users)',
-          subtitle: 'บัญชี merchant ใน collection users (van1)',
-          onTap: () => Navigator.of(context).push(
-            MaterialPageRoute<void>(builder: (_) => const MerchantManagementScreen()),
+        CapabilityGate(
+          capability: AdminCapability.catalog,
+          child: _AdminPrimaryButton(
+            icon: Icons.category_outlined,
+            title: 'จัดการหมวดสินค้า',
+            subtitle: 'สินค้า AI ไม่มั่นใจ • แก้หมวดผิด • เพิ่มหัวข้อใหม่',
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(
+                builder: (_) => const AdminCatalogReviewScreen(),
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(height: 12),
+        CapabilityGate(
+          capability: AdminCapability.shops,
+          child: _AdminPrimaryButton(
+            icon: Icons.storefront_outlined,
+            title: 'จัดการร้านค้า',
+            subtitle: 'อนุมัติร้าน • สินค้ารอตรวจ (AI) • ช่วยอัปโหลด • ตั้งค่ารูป/วิดีโอ',
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(builder: (_) => const ShopManagementScreen()),
+            ),
+          ),
+        ),
+        const SizedBox(height: 12),
+        CapabilityGate(
+          capability: AdminCapability.riders,
+          child: _AdminPrimaryButton(
+            icon: Icons.delivery_dining_outlined,
+            title: 'จัดการไรเดอร์',
+            subtitle: 'เปิด/ระงับความพร้อมรับงาน van3',
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(builder: (_) => const RiderManagementScreen()),
+            ),
+          ),
+        ),
+        const SizedBox(height: 12),
+        CapabilityGate(
+          capability: AdminCapability.announcements,
+          child: _AdminPrimaryButton(
+            icon: Icons.campaign_outlined,
+            title: 'ประกาศแจ้งเตือน',
+            subtitle: 'ส่งประกาศไปร้านค้า / ลูกค้า / ไรเดอร์ — แสดงที่ปุ่มแจ้งเตือน',
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(
+                builder: (_) => const AdminAnnouncementScreen(),
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(height: 12),
+        CapabilityGate(
+          capability: AdminCapability.workInbox,
+          child: _AdminPrimaryButton(
+            icon: Icons.inbox_outlined,
+            title: 'งานแอดมินรวม',
+            subtitle: 'สินค้ารอตรวจ • ลูกค้า • ร้านค้า • ไรเดอร์ — ดูที่แท็บแชทด้วย',
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(
+                builder: (_) => const AdminWorkInboxScreen(),
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(height: 12),
+        CapabilityGate(
+          capability: AdminCapability.customers,
+          child: _AdminPrimaryButton(
+            icon: Icons.people_alt_outlined,
+            title: 'จัดการลูกค้า',
+            subtitle: 'ดู customer_users จาก van2',
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(builder: (_) => const CustomerManagementScreen()),
+            ),
+          ),
+        ),
+        const SizedBox(height: 12),
+        CapabilityGate(
+          capability: AdminCapability.settlementGp,
+          child: _AdminPrimaryButton(
+            icon: Icons.percent_rounded,
+            title: 'ตั้งค่าอัตราหัก',
+            subtitle: 'GP สินค้า / หักไรเดอร์ / ส่วนแบ่งไลด์เดอร์',
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(
+                builder: (_) => const AdminSettlementFeeConfigScreen(),
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(height: 12),
+        CapabilityGate(
+          capability: AdminCapability.creditHub,
+          child: _AdminPrimaryButton(
+            icon: Icons.toll_outlined,
+            title: 'เครดิตระบบ',
+            subtitle: 'ดูยอด van1/van3 รวม · รายบุคคล · ปรับ ledger (+/-)',
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(
+                builder: (_) => const AdminCreditHubScreen(),
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(height: 12),
+        CapabilityGate(
+          capability: AdminCapability.withdraw,
+          child: _AdminPrimaryButton(
+            icon: Icons.payments_outlined,
+            title: 'คิวถอนเงิน',
+            subtitle: 'PromptPay / ธนาคาร · QR · CSV · ยืนยันสลิป',
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(
+                builder: (_) => const AdminWithdrawQueueScreen(),
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(height: 12),
+        CapabilityGate(
+          capability: AdminCapability.withdraw,
+          child: _AdminPrimaryButton(
+            icon: Icons.upload_file_outlined,
+            title: 'นำเข้า CSV ผลโอนเงิน',
+            subtitle: 'อัปเดตสถานะ paid/failed หลังโอนผ่านธนาคาร',
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(
+                builder: (_) => const AdminPayoutImportScreen(),
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(height: 12),
+        CapabilityGate(
+          capability: AdminCapability.social,
+          child: _AdminPrimaryButton(
+            icon: Icons.share_outlined,
+            title: 'โซเชียลแดชบอร์ด',
+            subtitle: 'อัปโหลดวิดีโอครั้งเดียว → FB/IG, YouTube, TikTok + กล่องคอมเมนต์',
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(
+                builder: (_) => const AdminSocialDashboardScreen(),
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(height: 12),
+        CapabilityGate(
+          capability: AdminCapability.shops,
+          child: _AdminPrimaryButton(
+            icon: Icons.store_mall_directory_outlined,
+            title: 'ร้านค้า (users)',
+            subtitle: 'บัญชี merchant ใน collection users (van1)',
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(builder: (_) => const MerchantManagementScreen()),
+            ),
           ),
         ),
         const SizedBox(height: 12),
@@ -1049,8 +1319,9 @@ class _RiderCard extends StatelessWidget {
 
   Future<void> _setRegistrationStatus(
     BuildContext context,
-    String status,
-  ) async {
+    String status, {
+    String? reviewNote,
+  }) async {
     final adminUid = FirebaseAuth.instance.currentUser?.uid;
     if (adminUid == null) {
       return;
@@ -1060,7 +1331,7 @@ class _RiderCard extends StatelessWidget {
         riderId: rider.id,
         status: status,
         adminUid: adminUid,
-        reviewNote: status == 'rejected' ? 'เอกสารหรือบัญชีไม่ครบถ้วน' : null,
+        reviewNote: reviewNote,
       );
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -1076,6 +1347,40 @@ class _RiderCard extends StatelessWidget {
         );
       }
     }
+  }
+
+  Future<void> _rejectWithReason(BuildContext context) async {
+    final reasonController = TextEditingController();
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('ปฏิเสธการสมัคร'),
+        content: TextField(
+          controller: reasonController,
+          decoration: const InputDecoration(
+            labelText: 'เหตุผล',
+            border: OutlineInputBorder(),
+          ),
+          maxLines: 3,
+        ),
+        actions: <Widget>[
+          TextButton(onPressed: () => Navigator.pop(dialogContext, false), child: const Text('ยกเลิก')),
+          FilledButton(onPressed: () => Navigator.pop(dialogContext, true), child: const Text('ปฏิเสธ')),
+        ],
+      ),
+    );
+    if (confirmed != true || !context.mounted) {
+      reasonController.dispose();
+      return;
+    }
+    await _setRegistrationStatus(
+      context,
+      'rejected',
+      reviewNote: reasonController.text.trim().isEmpty
+          ? 'เอกสารหรือบัญชีไม่ครบถ้วน'
+          : reasonController.text.trim(),
+    );
+    reasonController.dispose();
   }
 
   @override
@@ -1098,12 +1403,16 @@ class _RiderCard extends StatelessWidget {
       ],
       actions: <Widget>[
         if (regStatus == 'pending') ...<Widget>[
+          OutlinedButton(
+            onPressed: () => showAdminRiderDocumentReview(context, rider: rider),
+            child: const Text('ตรวจเอกสาร'),
+          ),
           FilledButton(
             onPressed: () => _setRegistrationStatus(context, 'approved'),
             child: const Text('อนุมัติสมัคร'),
           ),
           OutlinedButton(
-            onPressed: () => _setRegistrationStatus(context, 'rejected'),
+            onPressed: () => _rejectWithReason(context),
             child: const Text('ปฏิเสธ'),
           ),
         ],
@@ -1361,7 +1670,10 @@ class _AdminPrimaryButton extends StatelessWidget {
       borderRadius: BorderRadius.circular(22),
       child: InkWell(
         borderRadius: BorderRadius.circular(22),
-        onTap: onTap,
+        onTap: () {
+          unawaited(AdminActivityLog.logOpenMenu(title: title));
+          onTap();
+        },
         child: Container(
           padding: const EdgeInsets.all(18),
           decoration: BoxDecoration(

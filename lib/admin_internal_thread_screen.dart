@@ -10,6 +10,7 @@ import 'admin_internal_chat_repository.dart';
 import 'models/admin_peer_profile.dart';
 import 'services/admin_call_service.dart';
 import 'admin_voice_call_screen.dart';
+import 'widgets/admin_cached_chat_image.dart';
 
 class AdminInternalThreadScreen extends StatefulWidget {
   const AdminInternalThreadScreen({
@@ -240,13 +241,49 @@ class _AdminInternalThreadScreenState extends State<AdminInternalThreadScreen> {
                     ),
                   ),
                   ..._pendingFiles.map(
-                    (file) => Padding(
-                      padding: const EdgeInsets.only(right: 8, top: 8, bottom: 8),
-                      child: Chip(
-                        label: Text(file.name, overflow: TextOverflow.ellipsis),
-                        onDeleted: () => setState(() => _pendingFiles.remove(file)),
-                      ),
-                    ),
+                    (file) {
+                      final isImage = AdminInternalChatRepository.isImageFile(
+                        file.name,
+                        file.extension,
+                      );
+                      if (isImage && file.path != null) {
+                        return Padding(
+                          padding: const EdgeInsets.only(right: 8, top: 8, bottom: 8),
+                          child: Stack(
+                            children: <Widget>[
+                              ClipRRect(
+                                borderRadius: BorderRadius.circular(8),
+                                child: Image.file(
+                                  File(file.path!),
+                                  width: 56,
+                                  height: 56,
+                                  fit: BoxFit.cover,
+                                ),
+                              ),
+                              Positioned(
+                                top: 0,
+                                right: 0,
+                                child: GestureDetector(
+                                  onTap: () => setState(() => _pendingFiles.remove(file)),
+                                  child: const CircleAvatar(
+                                    radius: 10,
+                                    backgroundColor: Colors.black54,
+                                    child: Icon(Icons.close, size: 12, color: Colors.white),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        );
+                      }
+                      return Padding(
+                        padding: const EdgeInsets.only(right: 8, top: 8, bottom: 8),
+                        child: Chip(
+                          label: Text(file.name, overflow: TextOverflow.ellipsis),
+                          onDeleted: () => setState(() => _pendingFiles.remove(file)),
+                        ),
+                      );
+                    },
                   ),
                 ],
               ),
@@ -309,10 +346,28 @@ class _MessageBubble extends StatelessWidget {
 
   final AdminInternalMessage message;
 
+  List<String> get _displayImageUrls {
+    final urls = <String>[...message.imageUrls];
+    for (final attachment in message.attachments) {
+      if (attachment.isImage && attachment.url.isNotEmpty) {
+        urls.add(attachment.url);
+      }
+    }
+    return urls;
+  }
+
+  List<AdminInternalAttachment> get _documentAttachments {
+    return message.attachments
+        .where((attachment) => !attachment.isImage)
+        .toList(growable: false);
+  }
+
   @override
   Widget build(BuildContext context) {
     final currentUid = FirebaseAuth.instance.currentUser?.uid;
     final isMine = message.senderUid == currentUid;
+    final imageUrls = _displayImageUrls;
+    final fileAttachments = _documentAttachments;
 
     return Align(
       alignment: isMine ? Alignment.centerRight : Alignment.centerLeft,
@@ -335,24 +390,25 @@ class _MessageBubble extends StatelessWidget {
               ),
             if (message.message.isNotEmpty)
               Text(message.message, style: const TextStyle(height: 1.35)),
-            if (message.imageUrls.isNotEmpty) ...<Widget>[
+            if (imageUrls.isNotEmpty) ...<Widget>[
               const SizedBox(height: 8),
               Wrap(
                 spacing: 6,
                 runSpacing: 6,
-                children: message.imageUrls
+                children: imageUrls
                     .map(
-                      (url) => ClipRRect(
-                        borderRadius: BorderRadius.circular(8),
-                        child: Image.network(url, width: 120, height: 120, fit: BoxFit.cover),
+                      (url) => AdminCachedChatImage(
+                        url: url,
+                        width: 120,
+                        height: 120,
                       ),
                     )
                     .toList(growable: false),
               ),
             ],
-            if (message.attachments.isNotEmpty) ...<Widget>[
+            if (fileAttachments.isNotEmpty) ...<Widget>[
               const SizedBox(height: 8),
-              ...message.attachments.map(
+              ...fileAttachments.map(
                 (attachment) => TextButton.icon(
                   onPressed: () async {
                     final uri = Uri.parse(attachment.url);

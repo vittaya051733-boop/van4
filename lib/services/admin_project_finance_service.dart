@@ -7,6 +7,7 @@ import 'package:firebase_storage/firebase_storage.dart';
 import '../admin_order_support.dart';
 import '../admin_repository.dart';
 import '../admin_settlement_support.dart';
+import 'admin_tax_service.dart';
 
 class AdminProjectFinanceConfig {
   const AdminProjectFinanceConfig({
@@ -50,6 +51,13 @@ class AdminProjectExpenseRecord {
     this.receiptImageUrl,
     this.createdAt,
     this.createdByEmail,
+    this.amountExVat,
+    this.vatAmount,
+    this.vatRate,
+    this.supplierTaxId,
+    this.invoiceNumber,
+    this.invoiceDate,
+    this.taxDeductible = true,
   });
 
   final String id;
@@ -60,6 +68,13 @@ class AdminProjectExpenseRecord {
   final String? receiptImageUrl;
   final DateTime? createdAt;
   final String? createdByEmail;
+  final double? amountExVat;
+  final double? vatAmount;
+  final double? vatRate;
+  final String? supplierTaxId;
+  final String? invoiceNumber;
+  final DateTime? invoiceDate;
+  final bool taxDeductible;
 
   factory AdminProjectExpenseRecord.fromSnapshot(
     DocumentSnapshot<Map<String, dynamic>> doc,
@@ -74,6 +89,13 @@ class AdminProjectExpenseRecord {
       receiptImageUrl: _nullableString(data['receiptImageUrl']),
       createdAt: _readDateTime(data['createdAt']),
       createdByEmail: _nullableString(data['createdByEmail']),
+      amountExVat: _nullableMoney(data['amountExVat']),
+      vatAmount: _nullableMoney(data['vatAmount']),
+      vatRate: _nullableMoney(data['vatRate']),
+      supplierTaxId: _nullableString(data['supplierTaxId']),
+      invoiceNumber: _nullableString(data['invoiceNumber']),
+      invoiceDate: _readDateTime(data['invoiceDate']),
+      taxDeductible: data['taxDeductible'] != false,
     );
   }
 }
@@ -169,6 +191,14 @@ class AdminProjectFinanceService {
     String? note,
     String? category,
     String? localReceiptPath,
+    double? amountExVat,
+    double? vatAmount,
+    double? vatRate,
+    String? supplierTaxId,
+    String? invoiceNumber,
+    DateTime? invoiceDate,
+    bool taxDeductible = true,
+    bool hasVatBreakdown = false,
   }) async {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) {
@@ -193,11 +223,37 @@ class AdminProjectFinanceService {
       if (category != null && category.trim().isNotEmpty)
         'category': category.trim(),
       if (receiptImageUrl != null) 'receiptImageUrl': receiptImageUrl,
+      if (hasVatBreakdown && amountExVat != null) 'amountExVat': amountExVat,
+      if (hasVatBreakdown && vatAmount != null) 'vatAmount': vatAmount,
+      if (hasVatBreakdown && vatRate != null) 'vatRate': vatRate,
+      if (supplierTaxId != null && supplierTaxId.trim().isNotEmpty)
+        'supplierTaxId': supplierTaxId.trim(),
+      if (invoiceNumber != null && invoiceNumber.trim().isNotEmpty)
+        'invoiceNumber': invoiceNumber.trim(),
+      if (invoiceDate != null) 'invoiceDate': Timestamp.fromDate(invoiceDate),
+      'taxDeductible': taxDeductible,
       'createdAt': FieldValue.serverTimestamp(),
       'createdByUid': user.uid,
       if (user.email != null && user.email!.trim().isNotEmpty)
         'createdByEmail': user.email!.trim(),
     });
+
+    try {
+      final taxConfig = await AdminTaxService.fetchTaxConfig();
+      await AdminTaxService.syncExpenseLedger(
+        expenseId: docRef.id,
+        title: title,
+        amountBaht: amountBaht,
+        taxConfig: taxConfig,
+        amountExVat: hasVatBreakdown ? amountExVat : null,
+        vatAmount: hasVatBreakdown ? vatAmount : null,
+        vatRate: hasVatBreakdown ? vatRate : null,
+        supplierTaxId: supplierTaxId,
+        invoiceNumber: invoiceNumber,
+        invoiceDate: invoiceDate,
+        taxDeductible: taxDeductible,
+      );
+    } catch (_) {}
 
     return docRef.id;
   }
@@ -209,6 +265,9 @@ class AdminProjectFinanceService {
     final doc = await _collectionRef.doc(expenseId).get();
     final receiptUrl = _nullableString(doc.data()?['receiptImageUrl']);
     await _collectionRef.doc(expenseId).delete();
+    try {
+      await AdminTaxService.deleteExpenseLedger(expenseId);
+    } catch (_) {}
     if (receiptUrl != null) {
       try {
         await FirebaseStorage.instance.refFromURL(receiptUrl).delete();
@@ -351,6 +410,13 @@ class AdminProjectFinanceService {
     await ref.putFile(file);
     return ref.getDownloadURL();
   }
+}
+
+double? _nullableMoney(Object? value) {
+  if (value == null) {
+    return null;
+  }
+  return _readMoney(value);
 }
 
 double _readMoney(Object? value) {

@@ -4,11 +4,11 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 
-import 'admin_image_widgets.dart';
 import 'models/admin_peer_chat_message.dart';
 import 'models/admin_peer_profile.dart';
 import 'services/admin_peer_chat_service.dart';
 import 'utils/admin_support_call_launcher.dart';
+import 'widgets/admin_cached_chat_image.dart';
 
 class AdminPeerChatScreen extends StatefulWidget {
   const AdminPeerChatScreen({
@@ -340,9 +340,10 @@ class _MessageBody extends StatelessWidget {
     if (message.type == 'image' &&
         message.mediaUrl != null &&
         message.mediaUrl!.trim().isNotEmpty) {
-      return AdminSafeAvatar(
-        imageUrl: message.mediaUrl,
-        size: 180,
+      return AdminCachedChatImage(
+        url: message.mediaUrl!,
+        width: 180,
+        height: 180,
         borderRadius: 10,
       );
     }

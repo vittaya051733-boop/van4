@@ -157,9 +157,15 @@ class _AdminProjectFinanceScreenState extends State<AdminProjectFinanceScreen> {
   Future<void> _openAddExpenseDialog() async {
     final titleController = TextEditingController();
     final amountController = TextEditingController();
+    final exVatController = TextEditingController();
+    final vatAmountController = TextEditingController();
+    final supplierTaxIdController = TextEditingController();
+    final invoiceNumberController = TextEditingController();
     final noteController = TextEditingController();
     final categoryController = TextEditingController();
     String? receiptPath;
+    var includeVatBreakdown = false;
+    var taxDeductible = true;
 
     final saved = await showDialog<bool>(
       context: context,
@@ -186,10 +192,65 @@ class _AdminProjectFinanceScreenState extends State<AdminProjectFinanceScreen> {
                         decimal: true,
                       ),
                       decoration: const InputDecoration(
-                        labelText: 'จำนวนเงิน (บาท)',
+                        labelText: 'จำนวนเงินรวม (บาท)',
                         border: OutlineInputBorder(),
                       ),
                     ),
+                    const SizedBox(height: 8),
+                    SwitchListTile(
+                      contentPadding: EdgeInsets.zero,
+                      title: const Text('แยก VAT (ใบกำกับ)'),
+                      value: includeVatBreakdown,
+                      onChanged: (value) =>
+                          setLocalState(() => includeVatBreakdown = value),
+                    ),
+                    if (includeVatBreakdown) ...<Widget>[
+                      TextField(
+                        controller: exVatController,
+                        keyboardType: const TextInputType.numberWithOptions(
+                          decimal: true,
+                        ),
+                        decoration: const InputDecoration(
+                          labelText: 'มูลค่าก่อน VAT',
+                          border: OutlineInputBorder(),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      TextField(
+                        controller: vatAmountController,
+                        keyboardType: const TextInputType.numberWithOptions(
+                          decimal: true,
+                        ),
+                        decoration: const InputDecoration(
+                          labelText: 'VAT',
+                          border: OutlineInputBorder(),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      TextField(
+                        controller: supplierTaxIdController,
+                        keyboardType: TextInputType.number,
+                        decoration: const InputDecoration(
+                          labelText: 'เลขผู้เสียภาษีผู้ขาย',
+                          border: OutlineInputBorder(),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      TextField(
+                        controller: invoiceNumberController,
+                        decoration: const InputDecoration(
+                          labelText: 'เลขที่ใบกำกับ',
+                          border: OutlineInputBorder(),
+                        ),
+                      ),
+                      SwitchListTile(
+                        contentPadding: EdgeInsets.zero,
+                        title: const Text('หักภาษีเงินได้ได้'),
+                        value: taxDeductible,
+                        onChanged: (value) =>
+                            setLocalState(() => taxDeductible = value),
+                      ),
+                    ],
                     const SizedBox(height: 12),
                     TextField(
                       controller: categoryController,
@@ -283,10 +344,18 @@ class _AdminProjectFinanceScreenState extends State<AdminProjectFinanceScreen> {
 
     final title = titleController.text.trim();
     final amount = _parseMoneyInput(amountController.text);
+    final exVat = _parseMoneyInput(exVatController.text);
+    final vatAmount = _parseMoneyInput(vatAmountController.text);
+    final supplierTaxId = supplierTaxIdController.text.trim();
+    final invoiceNumber = invoiceNumberController.text.trim();
     final note = noteController.text.trim();
     final category = categoryController.text.trim();
     titleController.dispose();
     amountController.dispose();
+    exVatController.dispose();
+    vatAmountController.dispose();
+    supplierTaxIdController.dispose();
+    invoiceNumberController.dispose();
     noteController.dispose();
     categoryController.dispose();
 
@@ -313,6 +382,12 @@ class _AdminProjectFinanceScreenState extends State<AdminProjectFinanceScreen> {
         note: note.isEmpty ? null : note,
         category: category.isEmpty ? null : category,
         localReceiptPath: receiptPath,
+        hasVatBreakdown: includeVatBreakdown,
+        amountExVat: includeVatBreakdown ? exVat : null,
+        vatAmount: includeVatBreakdown ? vatAmount : null,
+        supplierTaxId: supplierTaxId.isEmpty ? null : supplierTaxId,
+        invoiceNumber: invoiceNumber.isEmpty ? null : invoiceNumber,
+        taxDeductible: taxDeductible,
       );
       if (!mounted) {
         return;

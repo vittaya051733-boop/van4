@@ -6,6 +6,8 @@ import 'admin_internal_chat_hub_screen.dart';
 import 'admin_repository.dart';
 import 'admin_shop_screens.dart';
 import 'admin_support_screens.dart';
+import 'models/admin_work_task.dart';
+import 'widgets/admin_work_claim_bar.dart';
 
 enum _WorkInboxFilter {
   all,
@@ -564,6 +566,11 @@ class _ProductReviewWorkTile extends StatelessWidget {
                         background: Color(0xFFFEE2E2),
                         foreground: Color(0xFFDC2626),
                       ),
+                    ),
+                    AdminWorkClaimBar(
+                      sourceType: AdminWorkSourceType.productReview,
+                      sourceId: product.id,
+                      title: product.name,
                     ),
                   ],
                 ),

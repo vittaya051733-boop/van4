@@ -5,23 +5,26 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
-import '../admin_repository.dart';
+import '../models/admin_alert_item.dart';
+import '../models/admin_alert_topic.dart';
+import 'admin_alert_center_service.dart';
+import 'admin_alert_preferences_service.dart';
 
-/// แจ้งเตือน (พร้อมเสียง) เมื่อมีสินค้าที่ AI ประเมินว่าผิดกฎหมายเข้ามาใหม่
-class AdminIllegalProductAlertService {
-  AdminIllegalProductAlertService._();
+/// Local notifications + sound for new admin alerts on focused topics only.
+class AdminAlertNotificationService {
+  AdminAlertNotificationService._();
 
-  static final AdminIllegalProductAlertService instance =
-      AdminIllegalProductAlertService._();
+  static final AdminAlertNotificationService instance =
+      AdminAlertNotificationService._();
 
-  static const String _channelId = 'van4_illegal_product_alerts';
-  static const String _channelName = 'สินค้ารอตรวจสอบ (AI)';
+  static const String _channelId = 'van4_admin_alerts';
+  static const String _channelName = 'แจ้งเตือนแอดมิน';
 
   final FlutterLocalNotificationsPlugin _localNotifications =
       FlutterLocalNotificationsPlugin();
 
-  StreamSubscription<List<AdminProductRecord>>? _subscription;
-  final Set<String> _knownProductIds = <String>{};
+  StreamSubscription<AdminAlertCenterSnapshot>? _subscription;
+  final Set<String> _knownAlertIds = <String>{};
   bool _baselineReady = false;
   bool _initialized = false;
 
@@ -29,6 +32,8 @@ class AdminIllegalProductAlertService {
     if (_initialized) {
       return;
     }
+
+    await AdminAlertPreferencesService.instance.ensureLoaded();
 
     const androidSettings = AndroidInitializationSettings('@mipmap/ic_launcher');
     const iosSettings = DarwinInitializationSettings(
@@ -71,7 +76,7 @@ class AdminIllegalProductAlertService {
     const channel = AndroidNotificationChannel(
       _channelId,
       _channelName,
-      description: 'แจ้งเตือนเมื่อ AI ส่งสินค้าให้แอดมินตรวจสอบก่อนขึ้นขาย',
+      description: 'แจ้งเตือนเมื่อมีงานแอดมินที่เลือกโฟกัสไว้',
       importance: Importance.max,
       playSound: true,
       enableVibration: true,
@@ -83,12 +88,12 @@ class AdminIllegalProductAlertService {
     await initialize();
     await _subscription?.cancel();
     _baselineReady = false;
-    _knownProductIds.clear();
+    _knownAlertIds.clear();
 
-    _subscription = AdminRepository.streamPendingAiProductReviews().listen(
-      _handleProducts,
+    _subscription = AdminAlertCenterService.instance.streamAlerts().listen(
+      _handleSnapshot,
       onError: (Object error, StackTrace stack) {
-        debugPrint('Illegal product alert stream error: $error\n$stack');
+        debugPrint('Admin alert notification stream error: $error\n$stack');
       },
     );
   }
@@ -97,48 +102,50 @@ class AdminIllegalProductAlertService {
     await _subscription?.cancel();
     _subscription = null;
     _baselineReady = false;
-    _knownProductIds.clear();
+    _knownAlertIds.clear();
   }
 
-  void _handleProducts(List<AdminProductRecord> products) {
-    final currentIds = products.map((product) => product.id).toSet();
+  void _handleSnapshot(AdminAlertCenterSnapshot snapshot) {
+    final currentIds = snapshot.items.map((item) => item.id).toSet();
 
     if (!_baselineReady) {
-      _knownProductIds
+      _knownAlertIds
         ..clear()
         ..addAll(currentIds);
       _baselineReady = true;
       return;
     }
 
-    final newProducts = products
-        .where((product) => !_knownProductIds.contains(product.id))
+    final focusedTypes = AdminAlertPreferencesService.instance.focusedTypes;
+    final newItems = snapshot.items
+        .where(
+          (item) =>
+              !_knownAlertIds.contains(item.id) &&
+              focusedTypes.contains(item.type),
+        )
         .toList(growable: false);
 
-    _knownProductIds
+    _knownAlertIds
       ..clear()
       ..addAll(currentIds);
 
-    for (final product in newProducts) {
-      unawaited(_notifyNewIllegalProduct(product));
+    for (final item in newItems) {
+      unawaited(_notifyNewAlert(item));
     }
   }
 
-  Future<void> _notifyNewIllegalProduct(AdminProductRecord product) async {
-    final shopLabel = product.shopName ?? product.ownerUid ?? 'ไม่ระบุร้าน';
-    final body = '$shopLabel — ${product.aiReviewSummary}';
-
+  Future<void> _notifyNewAlert(AdminAlertItem item) async {
     await SystemSound.play(SystemSoundType.alert);
 
     const androidDetails = AndroidNotificationDetails(
       _channelId,
       _channelName,
-      channelDescription: 'แจ้งเตือนเมื่อ AI พบสินค้าที่อาจผิดกฎหมาย',
+      channelDescription: 'แจ้งเตือนงานแอดมินที่เลือกโฟกัส',
       importance: Importance.max,
       priority: Priority.high,
       playSound: true,
       enableVibration: true,
-      ticker: 'สินค้ารอตรวจสอบ',
+      ticker: 'แจ้งเตือนแอดมิน',
     );
     const iosDetails = DarwinNotificationDetails(
       presentAlert: true,
@@ -150,15 +157,16 @@ class AdminIllegalProductAlertService {
       iOS: iosDetails,
     );
 
+    final topicLabel = AdminAlertTopic.label(item.type);
     await _localNotifications.show(
-      _notificationIdForProduct(product.id),
-      'พบสินค้ารอแอดมินตรวจสอบ (AI)',
-      '${product.name}\n$body',
+      _notificationIdForAlert(item.id),
+      '$topicLabel — ${item.title}',
+      item.subtitle,
       details,
     );
   }
 
-  int _notificationIdForProduct(String productId) {
-    return productId.hashCode.abs() % 100000;
+  int _notificationIdForAlert(String alertId) {
+    return alertId.hashCode.abs() % 100000;
   }
 }

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -13,6 +14,10 @@ import 'admin_settlement_support.dart';
 import 'services/promptpay_qr_payload.dart';
 import 'utils/guarded_functions.dart';
 import 'widgets/admin_promptpay_qr_sheet.dart';
+import 'models/admin_work_task.dart';
+import 'services/admin_activity_log.dart';
+import 'utils/thai_national_id.dart';
+import 'widgets/admin_work_claim_bar.dart';
 
 double _readWithdrawAmount(Object? value) {
   if (value is num) {
@@ -195,6 +200,18 @@ class _AdminWithdrawQueueScreenState extends State<AdminWithdrawQueueScreen> {
           SnackBar(content: Text('ยืนยันถอน ${amount.toStringAsFixed(2)} บาทแล้ว')),
         );
       }
+      unawaited(
+        AdminActivityLog.logFinancial(
+          action: 'confirm_withdraw',
+          targetType: AdminWorkSourceType.withdraw,
+          targetId: requestId,
+          labelTh: 'ยืนยันถอนเงิน $requestId',
+          detail: <String, Object?>{
+            'amount': amount,
+            'method': adminPayoutMethod,
+          },
+        ),
+      );
     } on FirebaseFunctionsException catch (error) {
       _showSnack(error.message ?? 'ยืนยันสลิปไม่สำเร็จ');
     } catch (error) {
@@ -221,6 +238,14 @@ class _AdminWithdrawQueueScreenState extends State<AdminWithdrawQueueScreen> {
           const SnackBar(content: Text('ปฏิเสธคำขอแล้ว — คืนยอดให้ผู้ใช้')),
         );
       }
+      unawaited(
+        AdminActivityLog.logFinancial(
+          action: 'reject_withdraw',
+          targetType: AdminWorkSourceType.withdraw,
+          targetId: requestId,
+          labelTh: 'ปฏิเสธถอนเงิน $requestId',
+        ),
+      );
     } on FirebaseFunctionsException catch (error) {
       _showSnack(error.message ?? 'ปฏิเสธไม่สำเร็จ');
     } catch (error) {
@@ -351,11 +376,14 @@ class _WithdrawRequestCardState extends State<_WithdrawRequestCard> {
   String? _adminPayoutMethod;
   String? _resolvedPromptPayId;
   bool _loadingPromptPay = false;
+  bool? _hasVerifiedNationalId;
+  bool _loadingKyc = false;
 
   @override
   void initState() {
     super.initState();
     _resolvePromptPayId();
+    _resolveKycStatus();
   }
 
   @override
@@ -363,7 +391,47 @@ class _WithdrawRequestCardState extends State<_WithdrawRequestCard> {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.data != widget.data) {
       _resolvedPromptPayId = null;
+      _hasVerifiedNationalId = null;
       _resolvePromptPayId();
+      _resolveKycStatus();
+    }
+  }
+
+  Future<void> _resolveKycStatus() async {
+    final uid = widget.data['uid']?.toString().trim() ?? '';
+    final actorType = widget.data['actorType']?.toString() ?? '';
+    if (uid.isEmpty) {
+      return;
+    }
+    setState(() => _loadingKyc = true);
+    try {
+      DocumentSnapshot<Map<String, dynamic>> doc;
+      if (actorType == 'merchant') {
+        doc = await FirebaseFirestore.instance.collection('contracts').doc(uid).get();
+      } else {
+        doc = await FirebaseFirestore.instance.collection('riders').doc(uid).get();
+        if (!doc.exists || normalizeNationalId(doc.data()?['verifiedNationalId']).length != 13) {
+          doc = await FirebaseFirestore.instance
+              .collection('rider_registrations')
+              .doc(uid)
+              .get();
+        }
+      }
+      final id = normalizeNationalId(doc.data()?['verifiedNationalId']);
+      if (mounted) {
+        setState(() {
+          _hasVerifiedNationalId =
+              id.length == 13 && validateThaiNationalIdChecksum(id);
+          _loadingKyc = false;
+        });
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          _hasVerifiedNationalId = false;
+          _loadingKyc = false;
+        });
+      }
     }
   }
 
@@ -528,6 +596,12 @@ class _WithdrawRequestCardState extends State<_WithdrawRequestCard> {
                   : '${gross.toStringAsFixed(2)} บาท · ${actorType == 'merchant' ? 'ร้านค้า' : 'ไรเดอร์'}',
               style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
             ),
+            AdminWorkClaimBar(
+              sourceType: AdminWorkSourceType.withdraw,
+              sourceId: widget.requestId,
+              title: 'ถอน ${netPayout.toStringAsFixed(2)} บาท',
+              branchId: widget.data['branchId']?.toString(),
+            ),
             if (fee > 0) ...[
               const SizedBox(height: 4),
               Text(
@@ -537,6 +611,21 @@ class _WithdrawRequestCardState extends State<_WithdrawRequestCard> {
             ],
             const SizedBox(height: 4),
             Text('UID: ${widget.data['uid']}'),
+            if (_loadingKyc)
+              const Text(
+                'กำลังตรวจ KYC...',
+                style: TextStyle(fontSize: 12, color: Color(0xFF64748B)),
+              )
+            else if (_hasVerifiedNationalId == false)
+              const Text(
+                '⚠ ยังไม่ยืนยันเลขบัตร — ใบแจ้งยอด/ compliance อาจไม่ครบ',
+                style: TextStyle(color: Color(0xFFB45309), fontWeight: FontWeight.w600),
+              )
+            else if (_hasVerifiedNationalId == true)
+              const Text(
+                '✓ ยืนยันเลขบัตรแล้ว',
+                style: TextStyle(color: Color(0xFF166534), fontWeight: FontWeight.w600),
+              ),
             if (hasPromptPay) ...<Widget>[
               if (_loadingPromptPay)
                 const Text(
